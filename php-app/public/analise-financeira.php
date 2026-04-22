@@ -1585,9 +1585,19 @@ function recalcTable() {
 }
 
 function _updateCards(sumFob, sumTax, sumMarkup, exchRate) {
-        cardFob.textContent    = fmtUsdJs(sumFob);
-        cardFobBrl.textContent = 'R$ ' + (sumFob * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
-    }
+    const cardFob       = document.getElementById('cardTotalFob');
+    const cardFobBrl    = document.getElementById('cardTotalFobBrl');
+    const cardTax       = document.getElementById('cardTotalTax');
+    const cardTaxBrl    = document.getElementById('cardTotalTaxBrl');
+    const cardMarkup    = document.getElementById('cardTotalMarkup');
+    const cardMarkupBrl = document.getElementById('cardTotalMarkupBrl');
+
+    if (cardFob)       cardFob.textContent       = fmtUsdJs(sumFob);
+    if (cardFobBrl)    cardFobBrl.textContent     = 'R$ ' + (sumFob * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+    if (cardTax)       cardTax.textContent        = fmtUsdJs(sumTax);
+    if (cardTaxBrl)    cardTaxBrl.textContent     = 'R$ ' + (sumTax * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
+    if (cardMarkup)    cardMarkup.textContent     = fmtUsdJs(sumMarkup);
+    if (cardMarkupBrl) cardMarkupBrl.textContent  = 'R$ ' + (sumMarkup * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
 // Bootstrap Tooltips

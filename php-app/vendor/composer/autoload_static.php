@@ -49,7 +49,7 @@ class ComposerStaticInit317401f39557cb7af005070794485a43
         ),
         'A' => 
         array (
-            'AzureMigration\\' => 15,
+            'App\\' => 4,
         ),
     );
 
@@ -119,7 +119,7 @@ class ComposerStaticInit317401f39557cb7af005070794485a43
         array (
             0 => __DIR__ . '/..' . '/markbaker/complex/classes/src',
         ),
-        'AzureMigration\\' => 
+        'App\\' => 
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),
@@ -136,9 +136,18 @@ class ComposerStaticInit317401f39557cb7af005070794485a43
     );
 
     public static $classMap = array (
-        'AzureMigration\\AzureResourceAnalyzer' => __DIR__ . '/../..' . '/src/AzureResourceAnalyzer.php',
-        'AzureMigration\\FileParser' => __DIR__ . '/../..' . '/src/FileParser.php',
-        'AzureMigration\\ReportGenerator' => __DIR__ . '/../..' . '/src/ReportGenerator.php',
+        'App\\Features\\AzureMigration\\Services\\AzureResourceAnalyzer' => __DIR__ . '/../..' . '/src/Features/AzureMigration/Services/AzureResourceAnalyzer.php',
+        'App\\Features\\AzureMigration\\Services\\FinancialAnalyzer' => __DIR__ . '/../..' . '/src/Features/AzureMigration/Services/FinancialAnalyzer.php',
+        'App\\Features\\AzureMigration\\Services\\MicrosoftPricingApi' => __DIR__ . '/../..' . '/src/Features/AzureMigration/Services/MicrosoftPricingApi.php',
+        'App\\Features\\CspPricing\\Services\\CspPriceValidator' => __DIR__ . '/../..' . '/src/Features/CspPricing/Services/CspPriceValidator.php',
+        'App\\Features\\CspPricing\\Services\\PriceListProcessor' => __DIR__ . '/../..' . '/src/Features/CspPricing/Services/PriceListProcessor.php',
+        'App\\Features\\M365Migration\\Services\\M365Processor' => __DIR__ . '/../..' . '/src/Features/M365Migration/Services/M365Processor.php',
+        'App\\Features\\SqlLicensing\\Models\\LicensingModel' => __DIR__ . '/../..' . '/src/Features/SqlLicensing/Models/LicensingModel.php',
+        'App\\Features\\SqlLicensing\\Services\\LicensingAdvisor' => __DIR__ . '/../..' . '/src/Features/SqlLicensing/Services/LicensingAdvisor.php',
+        'App\\Features\\SqlLicensing\\Services\\LicensingComparator' => __DIR__ . '/../..' . '/src/Features/SqlLicensing/Services/LicensingComparator.php',
+        'App\\Shared\\Services\\FileParser' => __DIR__ . '/../..' . '/src/Shared/Services/FileParser.php',
+        'App\\Shared\\Services\\ReportGenerator' => __DIR__ . '/../..' . '/src/Shared/Services/ReportGenerator.php',
+        'App\\Shared\\Services\\ServerLogger' => __DIR__ . '/../..' . '/src/Shared/Services/ServerLogger.php',
         'Complex\\Complex' => __DIR__ . '/..' . '/markbaker/complex/classes/src/Complex.php',
         'Complex\\Exception' => __DIR__ . '/..' . '/markbaker/complex/classes/src/Exception.php',
         'Complex\\Functions' => __DIR__ . '/..' . '/markbaker/complex/classes/src/Functions.php',

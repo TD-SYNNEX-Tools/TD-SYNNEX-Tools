@@ -3,7 +3,7 @@ declare(strict_types=1);
 session_start();
 // Helpers de tipo de migracao
 function migrationLabel(string $type): string {
-    return $type === 'mpn_csp' ? 'MPN → CSP' : 'MOSP → CSP';
+    return $type === 'mpn_csp' ? 'MPN &rarr; CSP' : 'MOSP &rarr; CSP';
 }
 function migrationQtyLabel(string $type): string {
     return $type === 'mpn_csp' ? 'UsageQuantity' : 'Quantity';
@@ -14,7 +14,10 @@ ini_set('log_errors', '1');
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use AzureMigration\FinancialAnalyzer;
+use App\Features\AzureMigration\Services\FinancialAnalyzer;
+use App\Features\AzureMigration\Services\MicrosoftPricingApi;
+use App\Features\AzureMigration\Services\AzureResourceAnalyzer;
+use App\Shared\Services\ServerLogger;
 
 $uploadDir = __DIR__ . '/../uploads';
 if (!is_dir($uploadDir)) {
@@ -92,11 +95,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $exchangeRate  = max(0.01, (float)($_POST['exchangeRate'] ?? 5.39));
             $clientName    = htmlspecialchars(trim((string)($_POST['clientName']     ?? '')), ENT_QUOTES);
             $refMonth      = htmlspecialchars(trim((string)($_POST['referenceMonth'] ?? '')), ENT_QUOTES);
-            $migrationType = in_array($_POST['migrationType'] ?? '', ['mosp_csp', 'mpn_csp'], true)
-                             ? $_POST['migrationType'] : 'mosp_csp';
-            $qtyColumn     = $migrationType === 'mpn_csp' ? 'usagequantity' : 'quantity';
+            
+            // Carregar schemas e determinar coluna de quantidade
+            $schemaConfig = require __DIR__ . '/../src/Shared/Config/dataset-schemas.php';
+            $schemaKey    = preg_replace('/[^a-z0-9_-]/', '', (string)($_POST['schemaKey'] ?? 'mosa_2019-11-01'));
+            $selectedSchema = $schemaConfig['schemas'][$schemaKey] ?? $schemaConfig['schemas']['mosa_2019-11-01'];
+            $qtyColumn     = $selectedSchema['quantityCol'] ?? 'quantity';
+            
+            // Determinar migrationType baseado no agreement (para compatibilidade)
+            $agreement = $selectedSchema['agreement'] ?? 'MOSA';
+            $migrationType = in_array($agreement, ['MPA', 'CSP']) ? 'mpn_csp' : 'mosp_csp';
 
             $analyzer    = new FinancialAnalyzer();
+            // Limpa cache de preços da API para forçar re-consultas (evita null persistente)
+            (new MicrosoftPricingApi())->clearCache();
+
+            $srvLog = ServerLogger::getInstance();
+            $srvLog->clear();
+            $srvLog->info('Sistema', 'Iniciando analise financeira', [
+                'arquivo' => $origName,
+                'schema'  => $schemaKey,
+                'cambio'  => $exchangeRate,
+                'cliente' => $clientName ?: '(nao informado)',
+            ]);
+
             $parseResult = $analyzer->parseFile($tmpPath, $qtyColumn);
 
             if (!$parseResult['success']) {
@@ -105,8 +127,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $results = $analyzer->analyze($parseResult['data'], $exchangeRate);
                 $results['clientName']     = $clientName;
                 $results['referenceMonth'] = $refMonth;
+                $results['schemaKey']      = $schemaKey;
+                $results['schemaVersion']  = $selectedSchema['version'] ?? '';
+                $results['schemaAgreement']= $agreement;
                 $results['migrationType']  = $migrationType;
                 $results['filename']       = htmlspecialchars($origName, ENT_QUOTES);
+
+                // --- Análise técnica: extrair ResourceType do ResourceId ---
+                $uniqueResources = [];
+                foreach ($results['results'] as $row) {
+                    $resId = $row['resourceId'] ?? '';
+                    $resType = '';
+                    if (preg_match('#/providers/([^/]+/[^/]+)#i', $resId, $m)) {
+                        $resType = $m[1];
+                    }
+                    if ($resType !== '' && !isset($uniqueResources[strtolower($resType)])) {
+                        $uniqueResources[strtolower($resType)] = [
+                            'ResourceType'    => $resType,
+                            'ResourceName'    => $row['resourceName'] ?? '',
+                            'ResourceGroup'   => $row['resourceGroup'] ?? '',
+                            'Location'        => $row['resourceLocation'] ?? '',
+                            'Subscription'    => $row['subscriptionName'] ?? '',
+                            'SubscriptionId'  => $row['subscriptionId'] ?? '',
+                        ];
+                    }
+                }
+                if (!empty($uniqueResources)) {
+                    $migAnalyzer = new AzureResourceAnalyzer();
+                    $techResults = $migAnalyzer->analyzeResources(array_values($uniqueResources));
+                    $results['technicalAnalysis'] = $techResults;
+                    $migLookup = [];
+                    foreach ($techResults['results'] as $mr) {
+                        $migLookup[strtolower($mr['resourceType'])] = $mr;
+                    }
+                    $results['migrationLookup'] = $migLookup;
+                }
+
                 $_SESSION['financialResults'] = $results;
                 $cnt = $results['summary']['totalRows'];
                 $uid = $results['summary']['uniqueMeterIds'];
@@ -169,8 +225,8 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analise Financeira de Migracao - TD SYNNEX Tools</title>
-    <link rel="stylesheet" href="css/style.css">
+    <title>Analise Financeira para Migracao Azure - TD SYNNEX Tools</title>
+    <link rel="stylesheet" href="assets/css/style.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -263,32 +319,40 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
         }
         @keyframes spin-anim { to { transform:rotate(360deg); } }
         .spin-icon { animation:spin-anim 1s linear infinite; display:inline-block; }
+        /* ── Analysis Tabs ── */
+        .analysis-tabs {
+            border-bottom:2px solid #e2e8f0; padding:0; gap:0; list-style:none;
+            display:flex; margin:0;
+        }
+        .analysis-tabs .nav-item { margin:0; }
+        .analysis-tabs .nav-link {
+            border:none; background:none; padding:10px 20px; font-size:.85rem;
+            font-weight:600; color:#94a3b8; border-bottom:2px solid transparent;
+            margin-bottom:-2px; cursor:pointer; transition:all .15s;
+            display:inline-flex; align-items:center;
+        }
+        .analysis-tabs .nav-link:hover { color:#005758; }
+        .analysis-tabs .nav-link.active { color:#005758; border-bottom-color:#005758; }
+        .mig-status-badge {
+            display:inline-flex;align-items:center;gap:3px;font-size:.75rem;
+            font-weight:600;padding:2px 8px;border-radius:12px;white-space:nowrap;
+        }
+        .mig-bar { display:flex;gap:2px;height:20px;border-radius:6px;overflow:hidden; }
+        .mig-bar > div { transition:width .3s; min-width:2px; }
+        .stat-box[style*="cursor:pointer"]:hover { transform:translateY(-2px);transition:transform .15s; }
+        .stat-box.tech-active { box-shadow:0 0 0 2px #005758; }
     </style>
 </head>
 <body>
 
-<header class="app-header">
-    <div class="d-flex align-items-center gap-3">
-        <img src="logo.png" alt="TD SYNNEX" style="height:44px;width:auto;object-fit:contain;">
-        <div>
-            <h1 class="mb-0" style="font-size:1.2rem;font-weight:700;color:#1e293b;">Tools</h1>
-            <p class="mb-0" style="font-size:.75rem;color:#64748b;font-weight:500;">Ferramentas e Calculadoras</p>
-        </div>
-    </div>
-    <nav class="d-flex align-items-center gap-3">
-        <a href="home.php"           style="font-size:.85rem;font-weight:500;color:#475569;text-decoration:none;">Home</a>
-        <a href="migracao-azure.php" style="font-size:.85rem;font-weight:500;color:#2563eb;border-bottom:2px solid #2563eb;padding-bottom:2px;text-decoration:none;">Migracao Azure</a>
-        <a href="sql-advisor.php"    style="font-size:.85rem;font-weight:500;color:#475569;text-decoration:none;">SQL Advisor</a>
-        <a href="home.php#cloud-partner-hub" style="font-size:.85rem;font-weight:500;color:#475569;text-decoration:none;">Cloud Partner HUB</a>
-    </nav>
-</header>
+<?php include __DIR__ . '/../templates/topbar.php'; ?>
 
 <div class="container-fluid px-4" style="max-width:1400px;margin:0 auto;">
 
-    <nav aria-label="breadcrumb" class="mb-3">
+    <nav aria-label="breadcrumb" class="mb-3" style="margin-top:16px;">
         <ol class="breadcrumb" style="font-size:.82rem;">
-            <li class="breadcrumb-item"><a href="migracao-azure.php" style="color:var(--td-teal);text-decoration:none;">Migracao Azure</a></li>
-            <li class="breadcrumb-item active">Analise Financeira MOSP - CSP</li>
+            <li class="breadcrumb-item"><a href="home.php" style="color:var(--td-teal);text-decoration:none;" data-i18n="breadcrumb.home">Home</a></li>
+            <li class="breadcrumb-item active" data-i18n="breadcrumb.financial">Analise Financeira</li>
         </ol>
     </nav>
 
@@ -296,6 +360,12 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
         $activeMigType = $results['migrationType'] ?? 'mosp_csp';
         $activeMigLabel = migrationLabel($activeMigType);
         $activeQtyLabel = migrationQtyLabel($activeMigType);
+        // Schema info
+        $schemaConfig = require __DIR__ . '/../src/Shared/Config/dataset-schemas.php';
+        $activeSchemaKey = $results['schemaKey'] ?? 'mosa_2019-11-01';
+        $activeSchema = $schemaConfig['schemas'][$activeSchemaKey] ?? $schemaConfig['schemas']['mosa_2019-11-01'];
+        $activeSchemaLabel = $activeSchema['agreement'] . ' ' . $activeSchema['version'];
+        $activeQtyLabel = ucfirst($activeSchema['quantityCol']);
     ?>
     <div class="mb-4 d-flex align-items-center gap-3">
         <div style="background:#ccfbf1;padding:10px;border-radius:8px;">
@@ -303,12 +373,10 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
         </div>
         <div>
             <h2 class="mb-0" style="font-size:1.5rem;font-weight:700;color:#1e293b;">
-                Analise Financeira de Migracao
-                <span style="color:var(--td-teal);"><?= htmlspecialchars($activeMigLabel) ?></span>
+                <span data-i18n="title.main">Analise Financeira para Migracao Azure</span>
             </h2>
             <p class="mb-0" style="font-size:.85rem;color:#64748b;">
-                Upload do export do Cost Management e comparativo de custos via API publica da Microsoft.
-                <span style="color:var(--td-teal);font-weight:600;">Coluna de quantidade: <?= htmlspecialchars($activeQtyLabel) ?></span>
+                <span data-i18n="title.description">Upload do export do Cost Management</span>
             </p>
         </div>
     </div>
@@ -339,22 +407,51 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <input type="hidden" name="uploadId" id="uploadIdField" value="">
                         <input type="hidden" name="fileName" id="fileNameField" value="">
 
-                        <!-- Tipo de Migração -->
-                        <div class="mb-3" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
-                            <label class="form-label" style="font-size:.82rem;font-weight:700;color:#005758;margin-bottom:6px;display:flex;align-items:center;gap:5px;">
-                                <i class="bi bi-arrow-left-right"></i> Tipo de Migração
+                        <?php
+                        // Carregar schemas disponíveis
+                        $schemaConfig = require __DIR__ . '/../src/Shared/Config/dataset-schemas.php';
+                        $schemas = $schemaConfig['schemas'];
+                        $agreements = $schemaConfig['agreements'];
+                        
+                        // Agrupar schemas por acordo (agreement)
+                        $schemasByAgreement = [];
+                        foreach ($schemas as $key => $cfg) {
+                            $schemasByAgreement[$cfg['agreement']][$key] = $cfg;
+                        }
+                        
+                        // Schema selecionado (padrão: MOSA 2019-11-01 para MOSP→CSP)
+                        $selectedSchema = $results['schemaKey'] ?? 'mosa_2019-11-01';
+                        ?>
+
+                        <!-- Dataset Schema -->
+                        <div class="mb-3" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;">
+                            <label class="form-label" style="font-size:.82rem;font-weight:700;color:#0369a1;margin-bottom:6px;display:flex;align-items:center;gap:5px;">
+                                <i class="bi bi-database"></i> Dataset Schema
                             </label>
-                            <select class="form-select form-select-sm" name="migrationType" id="migrationType" onchange="updateMigrationHint()">
-                                <option value="mosp_csp" <?= ($results['migrationType'] ?? 'mosp_csp') === 'mosp_csp' ? 'selected' : '' ?>>MOSP → CSP (Pay-As-You-Go)</option>
-                                <option value="mpn_csp"  <?= ($results['migrationType'] ?? '') === 'mpn_csp'  ? 'selected' : '' ?>>MPN → CSP (via Benefício MPN)</option>
+                            <select class="form-select form-select-sm" name="schemaKey" id="schemaKey" onchange="updateSchemaHint()">
+                                <?php foreach ($schemasByAgreement as $agreement => $schemaList): ?>
+                                <optgroup label="<?= htmlspecialchars($agreements[$agreement]) ?>">
+                                    <?php foreach ($schemaList as $key => $cfg): ?>
+                                    <option value="<?= $key ?>" <?= $selectedSchema === $key ? 'selected' : '' ?>
+                                            data-qty="<?= $cfg['quantityCol'] ?>"
+                                            data-version="<?= $cfg['version'] ?>"
+                                            data-agreement="<?= $cfg['agreement'] ?>"
+                                            <?= $cfg['isLatest'] ? 'data-latest="1"' : '' ?>>
+                                        <?= $cfg['isLatest'] ? '★ ' : '' ?><?= $cfg['version'] ?>
+                                    </option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                                <?php endforeach; ?>
                             </select>
-                            <div id="migrationHint" style="font-size:.72rem;color:#64748b;margin-top:5px;">
-                                Coluna de quantidade: <code id="migrationQtyCol"><?= ($results['migrationType'] ?? 'mosp_csp') === 'mpn_csp' ? 'UsageQuantity' : 'Quantity' ?></code>
-                            </div>
+
+
                         </div>
 
+                        <!-- Tipo de Migração (legacy - agora controlado pelo schema) -->
+                        <input type="hidden" name="migrationType" id="migrationType" value="<?= ($results['migrationType'] ?? 'mosp_csp') ?>">
+
                         <div class="mb-3">
-                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;">Cliente (opcional)</label>
+                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;" data-i18n="form.clientName">Cliente (opcional)</label>
                             <input type="text" class="form-control form-control-sm" name="clientName"
                                    value="<?= htmlspecialchars($results['clientName'] ?? '') ?>"
                                    placeholder="Ex: Empresa XYZ">
@@ -382,7 +479,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         </div>
 
                         <button type="submit" class="btn btn-teal btn-sm w-100" id="analyzeBtn" disabled>
-                            <i class="bi bi-search me-1"></i>Calcular Custos CSP
+                            <i class="bi bi-search me-1"></i><span data-i18n="form.analyze">Calcular Custos CSP</span>
                         </button>
 
                         <!-- Progress bar de upload chunked -->
@@ -407,7 +504,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                    oninput="recalcTable()">
                             <span class="input-group-text">%</span>
                         </div>
-                        <div style="font-size:.72rem;color:#94a3b8;margin-top:4px;">Total c/ Impostos = Total FOB &times; (1 + %/100)&nbsp;&nbsp;ex: 9,25</div>
+
                     </div>
 
                     <!-- Markup -->
@@ -421,22 +518,26 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                    oninput="recalcTable()">
                             <span class="input-group-text">%</span>
                         </div>
-                        <div style="font-size:.72rem;color:#94a3b8;margin-top:4px;">Total c/ Markup = Total c/ Impostos &times; (1 + %/100)</div>
+
                     </div>
 
                     <hr style="margin:14px 0;">
-                        <i class="bi bi-info-circle me-1" style="color:var(--td-teal);"></i>Colunas obrigatorias:
+                    <p style="font-size:.78rem;font-weight:600;color:#374151;margin-bottom:6px;">
+                        <i class="bi bi-info-circle me-1" style="color:var(--td-teal);"></i>Colunas usadas na validação:
                     </p>
                     <ul style="font-size:.76rem;color:#64748b;padding-left:1.2rem;margin-bottom:8px;">
-                        <li><code>MeterId</code> &mdash; ID do medidor Azure</li>
-                        <li><code>Quantity</code> &mdash; Quantidade consumida</li>
-                        <li><code>CostInBillingCurrency</code> &mdash; Custo MOSP</li>
+                        <li><code>MeterID</code> &mdash; ID do medidor Azure</li>
+                        <li><code id="qtyColDisplay">Quantity</code> <span id="qtyColHint">(MOSA/EA/MCA)</span> ou <code>UsageQuantity</code> <span>(MPA/CSP)</span></li>
+                        <li><code>UnitOfMeasure</code> &mdash; Unidade de medida</li>
+                        <li><code>MeterName</code> &mdash; Nome do medidor</li>
+                        <li><code>ServiceName</code> <span style="color:#94a3b8;">ou MeterCategory/ConsumedService</span></li>
+                        <li><code>ResourceLocation</code> <span style="color:#94a3b8;">ou Location</span> &mdash; Região Azure</li>
                     </ul>
                     <p style="font-size:.74rem;color:#94a3b8;">
-                        Schema: <a href="https://learn.microsoft.com/en-us/azure/cost-management-billing/dataset-schema/cost-usage-details-mca-partner-subscription" target="_blank" style="color:var(--td-teal);">MCA Partner 2019-11-01</a>
+                        Schema: <a href="https://learn.microsoft.com/en-us/azure/cost-management-billing/dataset-schema/schema-index" target="_blank" style="color:var(--td-teal);">Cost Management Dataset Reference</a>
                     </p>
 
-                    <a href="exemplo-cost-management.csv" class="btn btn-sm btn-outline-secondary w-100" style="font-size:.78rem;">
+                    <a href="assets/examples/exemplo-cost-management.csv" class="btn btn-sm btn-outline-secondary w-100" style="font-size:.78rem;">
                         <i class="bi bi-download me-1"></i>Baixar CSV de Exemplo
                     </a>
                 </div>
@@ -450,9 +551,11 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
             <!-- Info bar -->
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3" style="font-size:.82rem;color:#64748b;">
-                <span style="background:#f0fdf4;color:#005758;font-weight:600;padding:2px 8px;border-radius:12px;font-size:.76rem;border:1px solid #bbf7d0;">
-                    <i class="bi bi-arrow-left-right me-1"></i><?= htmlspecialchars($activeMigLabel) ?>
+                <?php if (!empty($results['schemaAgreement']) && !empty($results['schemaVersion'])): ?>
+                <span style="background:#f0f9ff;color:#0369a1;font-weight:600;padding:2px 8px;border-radius:12px;font-size:.76rem;border:1px solid #bae6fd;">
+                    <i class="bi bi-database me-1"></i><?= htmlspecialchars($results['schemaAgreement']) ?> <?= htmlspecialchars($results['schemaVersion']) ?>
                 </span>
+                <?php endif; ?>
                 <?php if ($results['clientName']): ?>
                 <span><i class="bi bi-building me-1"></i><strong><?= htmlspecialchars($results['clientName']) ?></strong></span>
                 <?php endif; ?>
@@ -470,7 +573,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     <div class="stat-box csp">
                         <div class="stat-value" id="cardTotalFob"><?= fmtUsd($s['totalCsp']) ?></div>
                         <div class="stat-brl" id="cardTotalFobBrl"><?= fmtBrl($s['totalCspBrl']) ?></div>
-                        <div class="stat-label">Total FOB (CSP)</div>
+                        <div class="stat-label">Total FOB</div>
                     </div>
                 </div>
                 <div class="col-6 col-md-4">
@@ -503,6 +606,24 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
             </div>
             <?php endif; ?>
 
+            <!-- Tab navigation -->
+            <ul class="analysis-tabs mb-3" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link active" onclick="switchTab('financeiro')" id="tabBtnFinanceiro" type="button">
+                        <i class="bi bi-cash-stack me-1"></i>Detalhamento Financeiro
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" onclick="switchTab('tecnico')" id="tabBtnTecnico" type="button">
+                        <i class="bi bi-cpu me-1"></i>Analise Tecnica
+                        <?php if (!empty($results['technicalAnalysis']['summary'])): ?>
+                        <span class="badge rounded-pill" style="background:#005758;font-size:.68rem;margin-left:4px;"><?= $results['technicalAnalysis']['summary']['totalMovablePercent'] ?>% migravel</span>
+                        <?php endif; ?>
+                    </button>
+                </li>
+            </ul>
+
+            <div id="tab-financeiro">
             <!-- Export toolbar -->
             <div class="fin-card mb-3">
                 <div class="card-body p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -513,11 +634,11 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <form method="POST" class="d-inline">
                             <input type="hidden" name="action" value="export_csv">
                             <button type="submit" class="btn btn-sm btn-outline-success">
-                                <i class="bi bi-file-earmark-spreadsheet me-1"></i>CSV
+                                <i class="bi bi-file-earmark-spreadsheet me-1"></i><span data-i18n="btn.exportCsv">CSV</span>
                             </button>
                         </form>
                         <button type="button" class="btn btn-sm btn-teal" onclick="gerarPropostaPDF()" id="btnPdf">
-                            <i class="bi bi-file-earmark-pdf me-1"></i>Proposta PDF
+                            <i class="bi bi-file-earmark-pdf me-1"></i><span data-i18n="btn.generatePdf">Proposta PDF</span>
                         </button>
                         <form method="POST" class="d-inline">
                             <input type="hidden" name="action" value="new_analysis">
@@ -672,17 +793,17 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     <div class="d-flex align-items-center gap-2 flex-wrap">
                         <div class="d-flex align-items-center gap-1" style="font-size:.8rem;">
                             <label style="color:#94a3b8;white-space:nowrap;margin:0;"><i class="bi bi-calendar-range me-1"></i>De</label>
-                            <input type="date" id="dateFrom" class="form-control form-control-sm" style="width:140px;" oninput="filterTable()"
+                            <input type="date" id="dateFrom" class="form-control form-control-sm" style="width:140px;" onchange="filterTable()"
                                    value="<?= htmlspecialchars($minDate_) ?>" min="<?= htmlspecialchars($minDate_) ?>" max="<?= htmlspecialchars($maxDate_) ?>">
                             <label style="color:#94a3b8;margin:0;">Até</label>
-                            <input type="date" id="dateTo" class="form-control form-control-sm" style="width:140px;" oninput="filterTable()"
+                            <input type="date" id="dateTo" class="form-control form-control-sm" style="width:140px;" onchange="filterTable()"
                                    value="<?= htmlspecialchars($maxDate_) ?>" min="<?= htmlspecialchars($minDate_) ?>" max="<?= htmlspecialchars($maxDate_) ?>">
                             <button class="btn btn-sm btn-outline-secondary" onclick="clearDateFilter()" title="Limpar filtro de data" style="padding:2px 8px;">
                                 <i class="bi bi-x"></i>
                             </button>
                         </div>
                         <input type="text" id="searchInput" class="form-control form-control-sm" style="width:180px;"
-                               placeholder="Filtrar recurso..." oninput="filterTable()">
+                               placeholder="Filtrar recurso..." oninput="debouncedFilter()">
                     </div>
                 </div>
                 <div class="card-body p-0">
@@ -690,15 +811,15 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <table class="table table-hover table-fin mb-0" id="detailTable">
                             <thead style="position:sticky;top:0;z-index:1;">
                                 <tr>
-                                    <th style="width:160px;">Resource Name</th>
-                                    <th style="width:100px;">Data</th>
+                                    <th style="width:160px;" data-i18n="table.resource">Resource Name</th>
+                                    <th style="width:100px;" data-i18n="table.date">Data</th>
                                     <th style="width:270px;">Meter ID</th>
                                     <th style="width:140px;">Subscription</th>
                                     <th style="width:280px;">Subscription ID</th>
-                                    <th style="width:155px;">Servico / Meter</th>
-                                    <th style="width:130px;">Resource Group</th>
-                                    <th style="width:90px;">Região</th>
-                                    <th style="width:85px;">Qtd</th>
+                                    <th style="width:155px;" data-i18n="table.service">Servico / Meter</th>
+                                    <th style="width:130px;" data-i18n="table.resourceGroup">Resource Group</th>
+                                    <th style="width:90px;" data-i18n="table.region">Região</th>
+                                    <th style="width:85px;" data-i18n="table.quantity">Qtd</th>
                                     <th style="width:95px;">Custo MOSP</th>
                                     <th style="width:110px;">Preço Unit. FOB</th>
                                     <th style="width:135px;">Total sem Impostos</th>
@@ -775,17 +896,11 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                     <?php
                                         // ── helpers inline ──
                                         $mId_      = $r['meterId'];
-                                        $csvRaw_   = $r['productId'] ?? '';
-                                        $csvSku_   = ($csvRaw_ !== '' && !str_contains($csvRaw_, '/') && strlen($csvRaw_) >= 5)
-                                                     ? substr($csvRaw_, 0, -4) . '/' . substr($csvRaw_, -4)
-                                                     : $csvRaw_;
-                                        $csvNorm_  = strtolower(str_replace([' ','-','_'], '', $r['resourceLocation'] ?? ''));
+                                        $csvLoc_   = $r['resourceLocation'] ?? '';
 
                                         $filterStr_ = $r['apiFilterUsed'] ?? "meterId eq '{$mId_}'";
                                         if (!$r['priceFound']) {
                                             $f1_ = "meterId eq '{$mId_}'"
-                                                 . ($csvSku_ !== '' ? " and skuId eq '{$csvSku_}'" : '')
-                                                 . ($csvNorm_ !== '' ? " and armRegionName eq '{$csvNorm_}'" : '')
                                                  . (!empty($r['unitOfMeasure']) ? " and unitOfMeasure eq '{$r['unitOfMeasure']}'" : '')
                                                  . " and priceType eq 'Consumption'";
                                             $filterStr_ = $f1_;
@@ -798,7 +913,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                                 return '<span class="vchk vchk-na" title="' . htmlspecialchars($label) . ': não retornado pela API">' . htmlspecialchars($label) . '</span>';
                                             }
                                             $c = $normalize
-                                                ? strtolower(str_replace([' ','-','_'], '', (string)$csvVal)) === strtolower($apiVal)
+                                                ? strtolower(str_replace([' ','-','_'], '', (string)$csvVal)) === strtolower(str_replace([' ','-','_'], '', (string)$apiVal))
                                                 : (string)$csvVal === (string)$apiVal;
                                             $icon = $c ? '✓' : '≠';
                                             $cls  = $c ? 'vchk-ok' : 'vchk-err';
@@ -817,10 +932,10 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                                 default => 'Encontrado',
                                             };
                                             echo '<div class="d-flex flex-wrap gap-1" style="max-width:210px;">';
-                                            // sku
-                                            echo $chk('skuId', $csvSku_, $r['apiSkuId'] ?? null);
-                                            // região
-                                            echo $chk('Região', $csvNorm_, $r['apiArmRegion'] ?? null);
+                                            // meterId
+                                            echo $chk('MeterId', $mId_, $r['apiMeterId'] ?? null);
+                                            // location (formato original do CSV)
+                                            echo $chk('Location', $csvLoc_, $r['apiLocation'] ?? null, true);
                                             // unitOfMeasure
                                             echo $chk('UoM', $r['unitOfMeasure'], $r['apiUnitOfMeasure'] ?? null);
                                             // meterName
@@ -850,6 +965,178 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     </div>
                 </div>
             </div>
+            </div><!-- /tab-financeiro -->
+
+            <!-- ===== ABA TÉCNICA ===== -->
+            <div id="tab-tecnico" style="display:none;">
+                <?php if (!empty($results['technicalAnalysis'])): ?>
+                <?php $tech = $results['technicalAnalysis']; $ts = $tech['summary']; ?>
+
+                <!-- Migration Summary Cards -->
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box" style="border-top-color:#005758;cursor:pointer;" onclick="toggleTechFilter('movable')" id="techCard-movable">
+                            <div class="stat-value" style="color:#005758;"><?= $ts['movable'] ?></div>
+                            <div class="stat-brl"><?= $ts['movablePercent'] ?>%</div>
+                            <div class="stat-label">Migraveis</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box" style="border-top-color:#0097D7;cursor:pointer;" onclick="toggleTechFilter('movable-with-restrictions')" id="techCard-movable-with-restrictions">
+                            <div class="stat-value" style="color:#0097D7;"><?= $ts['movableWithRestrictions'] ?></div>
+                            <div class="stat-brl"><?= $ts['movableWithRestrictionsPercent'] ?>%</div>
+                            <div class="stat-label">Com Restricoes</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box" style="border-top-color:#D9272E;cursor:pointer;" onclick="toggleTechFilter('not-movable')" id="techCard-not-movable">
+                            <div class="stat-value" style="color:#D9272E;"><?= $ts['notMovable'] ?></div>
+                            <div class="stat-brl"><?= $ts['notMovablePercent'] ?>%</div>
+                            <div class="stat-label">Nao Migraveis</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box" style="border-top-color:#737373;cursor:pointer;" onclick="toggleTechFilter('unknown')" id="techCard-unknown">
+                            <div class="stat-value" style="color:#737373;"><?= $ts['unknown'] ?></div>
+                            <div class="stat-brl"><?= $ts['unknownPercent'] ?>%</div>
+                            <div class="stat-label">Desconhecidos</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Migration Viability Bar -->
+                <div class="fin-card mb-3">
+                    <div class="card-header"><i class="bi bi-bar-chart me-2"></i>Viabilidade de Migracao</div>
+                    <div class="card-body p-3">
+                        <div class="mig-bar">
+                            <?php if ($ts['movablePercent'] > 0): ?>
+                            <div style="width:<?= $ts['movablePercent'] ?>%;background:#005758;" title="Migraveis: <?= $ts['movable'] ?> (<?= $ts['movablePercent'] ?>%)"></div>
+                            <?php endif; ?>
+                            <?php if ($ts['movableWithRestrictionsPercent'] > 0): ?>
+                            <div style="width:<?= $ts['movableWithRestrictionsPercent'] ?>%;background:#0097D7;" title="Com Restricoes: <?= $ts['movableWithRestrictions'] ?> (<?= $ts['movableWithRestrictionsPercent'] ?>%)"></div>
+                            <?php endif; ?>
+                            <?php if ($ts['notMovablePercent'] > 0): ?>
+                            <div style="width:<?= $ts['notMovablePercent'] ?>%;background:#D9272E;" title="Nao Migraveis: <?= $ts['notMovable'] ?> (<?= $ts['notMovablePercent'] ?>%)"></div>
+                            <?php endif; ?>
+                            <?php if ($ts['unknownPercent'] > 0): ?>
+                            <div style="width:<?= $ts['unknownPercent'] ?>%;background:#737373;" title="Desconhecidos: <?= $ts['unknown'] ?> (<?= $ts['unknownPercent'] ?>%)"></div>
+                            <?php endif; ?>
+                        </div>
+                        <div class="d-flex flex-wrap gap-3 mt-2" style="font-size:.75rem;">
+                            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#005758;margin-right:4px;vertical-align:middle;"></span>Migraveis (<?= $ts['movablePercent'] ?>%)</span>
+                            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#0097D7;margin-right:4px;vertical-align:middle;"></span>Com Restricoes (<?= $ts['movableWithRestrictionsPercent'] ?>%)</span>
+                            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#D9272E;margin-right:4px;vertical-align:middle;"></span>Nao Migraveis (<?= $ts['notMovablePercent'] ?>%)</span>
+                            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#737373;margin-right:4px;vertical-align:middle;"></span>Desconhecidos (<?= $ts['unknownPercent'] ?>%)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Export toolbar -->
+                <div class="fin-card mb-3">
+                    <div class="card-body p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <h6 class="mb-0" style="font-weight:600;color:#1e293b;">
+                            <i class="bi bi-file-earmark-arrow-down me-2" style="color:var(--td-teal);"></i>Exportar Analise Tecnica
+                        </h6>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTechCsv()">
+                                <i class="bi bi-file-earmark-spreadsheet me-1"></i>CSV
+                            </button>
+                            <button type="button" class="btn btn-sm btn-teal" onclick="exportTechPdf()" id="btnTechPdf">
+                                <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Resource Type Detail Table -->
+                <div class="fin-card">
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <span><i class="bi bi-list-check me-2"></i>Detalhamento por Tipo de Recurso</span>
+                        <div class="d-flex align-items-center gap-2">
+                            <input type="text" id="techSearchInput" class="form-control form-control-sm" style="width:180px;" placeholder="Filtrar recurso..." oninput="filterTechTable()">
+                            <span style="font-size:.78rem;color:#94a3b8;white-space:nowrap;"><span id="techRowCount"><?= $ts['total'] ?></span> tipos</span>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div style="overflow-x:auto;max-height:500px;overflow-y:auto;">
+                            <table class="table table-hover table-fin mb-0" id="techTable">
+                                <thead style="position:sticky;top:0;z-index:1;">
+                                    <tr>
+                                        <th style="width:280px;">Tipo do Recurso</th>
+                                        <th style="width:140px;">Subscription</th>
+                                        <th style="width:150px;">Status</th>
+                                        <th style="width:80px;text-align:center;">RG</th>
+                                        <th style="width:80px;text-align:center;">Sub</th>
+                                        <th style="width:80px;text-align:center;">Regiao</th>
+                                        <th>Observacoes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($tech['results'] as $tr_): ?>
+                                <tr data-tech-search="<?= htmlspecialchars(strtolower($tr_['resourceType'] . '|' . $tr_['provider'] . '|' . $tr_['notes'] . '|' . ($tr_['subscription'] ?? ''))) ?>"
+                                    data-status="<?= htmlspecialchars($tr_['status']) ?>">
+                                    <td style="font-size:.82rem;">
+                                        <div style="font-weight:500;"><?= htmlspecialchars($tr_['resourceType']) ?></div>
+                                        <div style="font-size:.7rem;color:#94a3b8;"><?= htmlspecialchars($tr_['provider']) ?></div>
+                                    </td>
+                                    <td style="font-size:.8rem;">
+                                        <div style="font-weight:500;"><?= htmlspecialchars($tr_['subscription'] ?? '—') ?></div>
+                                    </td>
+                                    <td>
+                                        <span class="mig-status-badge" style="background:<?= htmlspecialchars($tr_['statusColor']) ?>22;color:<?= htmlspecialchars($tr_['statusColor']) ?>;">
+                                            <?= $tr_['statusLabel'] ?>
+                                        </span>
+                                    </td>
+                                    <td style="text-align:center;font-size:.9rem;">
+                                        <?php if ($tr_['resourceGroupMove'] === true): ?>
+                                            <span style="color:#16a34a;" title="Migravel entre Resource Groups">&#10003;</span>
+                                        <?php elseif ($tr_['resourceGroupMove'] === false): ?>
+                                            <span style="color:#dc2626;" title="Nao migravel entre Resource Groups">&#10007;</span>
+                                        <?php else: ?>
+                                            <span style="color:#94a3b8;">&mdash;</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="text-align:center;font-size:.9rem;">
+                                        <?php if ($tr_['subscriptionMove'] === true): ?>
+                                            <span style="color:#16a34a;" title="Migravel entre Subscriptions">&#10003;</span>
+                                        <?php elseif ($tr_['subscriptionMove'] === false): ?>
+                                            <span style="color:#dc2626;" title="Nao migravel entre Subscriptions">&#10007;</span>
+                                        <?php else: ?>
+                                            <span style="color:#94a3b8;">&mdash;</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="text-align:center;font-size:.9rem;">
+                                        <?php if ($tr_['regionMove'] === true): ?>
+                                            <span style="color:#16a34a;" title="Migravel entre Regioes">&#10003;</span>
+                                        <?php elseif ($tr_['regionMove'] === false): ?>
+                                            <span style="color:#dc2626;" title="Nao migravel entre Regioes">&#10007;</span>
+                                        <?php else: ?>
+                                            <span style="color:#94a3b8;">&mdash;</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="font-size:.78rem;color:#64748b;"><?= htmlspecialchars($tr_['notes'] ?: '') ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <?php else: ?>
+                <!-- No ResourceId in CSV -->
+                <div class="fin-card d-flex align-items-center justify-content-center" style="min-height:220px;">
+                    <div class="text-center py-4 px-4">
+                        <i class="bi bi-info-circle" style="font-size:2rem;color:#94a3b8;"></i>
+                        <h6 style="font-weight:600;color:#64748b;margin-top:.75rem;">Analise tecnica indisponivel</h6>
+                        <p class="text-muted mb-0" style="font-size:.85rem;max-width:400px;">
+                            O arquivo CSV nao contem a coluna <code>ResourceId</code>, necessaria para identificar
+                            os tipos de recurso e avaliar a viabilidade de migracao entre Resource Groups, Subscriptions e Regioes.
+                        </p>
+                    </div>
+                </div>
+                <?php endif; ?>
+            </div><!-- /tab-tecnico -->
 
         <?php else: ?>
             <!-- Empty state -->
@@ -872,14 +1159,36 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-function updateMigrationHint() {
-    const sel = document.getElementById('migrationType');
-    const col = document.getElementById('migrationQtyCol');
-    const hint = document.getElementById('migrationHint');
+function updateSchemaHint() {
+    const sel = document.getElementById('schemaKey');
+    const col = document.getElementById('schemaQtyCol');
+    const badge = document.getElementById('schemaLatestBadge');
+    const qtyColDisplay = document.getElementById('qtyColDisplay');
+    const qtyColHint = document.getElementById('qtyColHint');
+    const migrationType = document.getElementById('migrationType');
     if (!sel || !col) return;
-    const isMpn = sel.value === 'mpn_csp';
-    col.textContent = isMpn ? 'UsageQuantity' : 'Quantity';
-    hint.style.color = isMpn ? '#7c3aed' : '#64748b';
+    
+    const opt = sel.selectedOptions[0];
+    const qtyCol = opt?.dataset.qty || 'quantity';
+    const version = opt?.dataset.version || '';
+    const agreement = opt?.dataset.agreement || 'MOSA';
+    const isLatest = opt?.dataset.latest === '1';
+    
+    col.textContent = qtyCol;
+    badge.style.display = isLatest ? '' : 'none';
+    
+    // Atualiza migrationType hidden (para compatibilidade)
+    if (migrationType) {
+        migrationType.value = ['MPA', 'CSP'].includes(agreement) ? 'mpn_csp' : 'mosp_csp';
+    }
+    
+    // Atualiza visualização na lista de colunas obrigatórias
+    if (qtyColDisplay) {
+        qtyColDisplay.textContent = qtyCol === 'usagequantity' ? 'UsageQuantity' : 'Quantity';
+    }
+    if (qtyColHint) {
+        qtyColHint.textContent = ['MPA', 'CSP'].includes(agreement) ? '(MPA/CSP)' : '(MOSA/EA/MCA)';
+    }
 }
 
 // ============================================================
@@ -1019,6 +1328,150 @@ if (dz) {
     });
 }
 
+function switchTab(tab) {
+    const fin = document.getElementById('tab-financeiro');
+    const tec = document.getElementById('tab-tecnico');
+    const btnFin = document.getElementById('tabBtnFinanceiro');
+    const btnTec = document.getElementById('tabBtnTecnico');
+    if (fin) fin.style.display = tab === 'financeiro' ? '' : 'none';
+    if (tec) tec.style.display = tab === 'tecnico' ? '' : 'none';
+    if (btnFin) btnFin.classList.toggle('active', tab === 'financeiro');
+    if (btnTec) btnTec.classList.toggle('active', tab === 'tecnico');
+}
+
+let _activeTechStatus = null;
+
+function toggleTechFilter(status) {
+    const cards = document.querySelectorAll('[id^="techCard-"]');
+    if (_activeTechStatus === status) {
+        _activeTechStatus = null;
+        cards.forEach(c => c.classList.remove('tech-active'));
+    } else {
+        _activeTechStatus = status;
+        cards.forEach(c => c.classList.toggle('tech-active', c.id === 'techCard-' + status));
+    }
+    filterTechTable();
+}
+
+function filterTechTable() {
+    const q = (document.getElementById('techSearchInput')?.value || '').toLowerCase();
+    const rows = document.querySelectorAll('#techTable tbody tr');
+    let visible = 0;
+    rows.forEach(tr => {
+        const matchText = !q || (tr.dataset.techSearch || '').includes(q);
+        const matchStatus = !_activeTechStatus || tr.dataset.status === _activeTechStatus;
+        const show = matchText && matchStatus;
+        tr.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    const rc = document.getElementById('techRowCount');
+    if (rc) rc.textContent = visible;
+}
+
+function exportTechCsv() {
+    const rows = document.querySelectorAll('#techTable tbody tr');
+    const lines = ['Tipo do Recurso,Provider,Status,Resource Group,Subscription,Regiao,Observacoes'];
+    rows.forEach(tr => {
+        if (tr.style.display === 'none') return;
+        const cells = tr.querySelectorAll('td');
+        const type = (cells[0]?.querySelector('div')?.textContent || '').trim();
+        const prov = (cells[0]?.querySelectorAll('div')[1]?.textContent || '').trim();
+        const st   = (cells[1]?.textContent || '').trim().replace(/[^\w\sáéíóúãçàèìòùÁÉÍÓÚÃÇÀÈÌÒÙ⚠️✅❌❓]/g, '').trim();
+        const rg   = (cells[2]?.textContent || '').trim() === '✓' ? 'Sim' : (cells[2]?.textContent || '').trim() === '✗' ? 'Nao' : '—';
+        const sub  = (cells[3]?.textContent || '').trim() === '✓' ? 'Sim' : (cells[3]?.textContent || '').trim() === '✗' ? 'Nao' : '—';
+        const reg  = (cells[4]?.textContent || '').trim() === '✓' ? 'Sim' : (cells[4]?.textContent || '').trim() === '✗' ? 'Nao' : '—';
+        const note = (cells[5]?.textContent || '').trim();
+        lines.push([type, prov, st, rg, sub, reg, note].map(v => '"' + v.replace(/"/g, '""') + '"').join(','));
+    });
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'analise_tecnica_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+function exportTechPdf() {
+    const btn = document.getElementById('btnTechPdf');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Gerando...'; }
+    setTimeout(() => { try { _doTechPdf(); } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-file-earmark-pdf me-1"></i>PDF'; }
+    }}, 30);
+}
+
+function _doTechPdf() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const W = 210, ML = 15, MR = 15, CW = W - ML - MR;
+    const TEAL = [0, 87, 88], DARK = [30, 41, 59], GRAY = [100, 116, 139];
+    const WHITE = [255, 255, 255], LIGHT = [248, 250, 252], BLUE = [0, 151, 215];
+
+    _pdfHeader(doc, 'Analise Tecnica de Migracao', W, TEAL, BLUE, WHITE, DARK, GRAY, ML);
+
+    let y = 44;
+    // Summary cards
+    const cards = document.querySelectorAll('#tab-tecnico .stat-box');
+    const cardData = [];
+    cards.forEach(c => {
+        const val = (c.querySelector('.stat-value')?.textContent || '0').trim();
+        const pct = (c.querySelector('.stat-brl')?.textContent || '').trim();
+        const lbl = (c.querySelector('.stat-label')?.textContent || '').trim();
+        cardData.push({ val, pct, lbl });
+    });
+    const cW = (CW - 12) / 4;
+    const cColors = [TEAL, [0,151,215], [217,39,46], [115,115,115]];
+    cardData.forEach((c, i) => {
+        const x = ML + i * (cW + 4);
+        doc.setFillColor(...LIGHT);
+        doc.roundedRect(x, y, cW, 22, 3, 3, 'F');
+        doc.setFillColor(...cColors[i]);
+        doc.rect(x, y, cW, 2, 'F');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...cColors[i]);
+        doc.text(c.val, x + cW / 2, y + 11, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...GRAY);
+        doc.text(c.pct, x + cW / 2, y + 16, { align: 'center' });
+        doc.setFontSize(6.5); doc.text(c.lbl.toUpperCase(), x + cW / 2, y + 20, { align: 'center' });
+    });
+    y += 30;
+
+    // Table
+    const visibleRows = [];
+    document.querySelectorAll('#techTable tbody tr').forEach(tr => {
+        if (tr.style.display === 'none') return;
+        const cells = tr.querySelectorAll('td');
+        const type = (cells[0]?.querySelector('div')?.textContent || '').trim();
+        const st   = (cells[1]?.textContent || '').trim();
+        const rg   = (cells[2]?.textContent || '').trim();
+        const sub  = (cells[3]?.textContent || '').trim();
+        const reg  = (cells[4]?.textContent || '').trim();
+        const note = (cells[5]?.textContent || '').trim();
+        visibleRows.push([type, st, rg, sub, reg, note.substring(0, 50)]);
+    });
+    if (visibleRows.length) {
+        doc.autoTable({
+            startY: y,
+            head: [['Tipo do Recurso', 'Status', 'RG', 'Sub', 'Regiao', 'Observacoes']],
+            body: visibleRows,
+            styles: { fontSize: 7, cellPadding: 2, overflow: 'ellipsize' },
+            headStyles: { fillColor: TEAL, textColor: WHITE, fontStyle: 'bold', fontSize: 7.5 },
+            alternateRowStyles: { fillColor: LIGHT },
+            margin: { left: ML, right: MR },
+            tableWidth: CW,
+            columnStyles: { 0: { cellWidth: 55 }, 1: { cellWidth: 30 }, 2: { cellWidth: 12, halign: 'center' }, 3: { cellWidth: 12, halign: 'center' }, 4: { cellWidth: 14, halign: 'center' } },
+            didDrawPage: () => {
+                const pg = doc.getCurrentPageInfo().pageNumber;
+                const fy = 297 - 14;
+                doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.3);
+                doc.line(ML, fy, W - MR, fy);
+                doc.setTextColor(160, 165, 170); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
+                doc.text('TD SYNNEX  |  Analise Tecnica  |  Documento Confidencial', ML, fy + 5);
+                doc.text('Pag. ' + pg, W - MR, fy + 5, { align: 'right' });
+            },
+        });
+    }
+    doc.save('analise_tecnica_' + new Date().toISOString().slice(0, 10) + '.pdf');
+}
+
 function clearDateFilter() {
     const df = document.getElementById('dateFrom');
     const dt = document.getElementById('dateTo');
@@ -1027,32 +1480,71 @@ function clearDateFilter() {
     filterTable();
 }
 
+let _filterTimer = null;
+function debouncedFilter() {
+    clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(filterTable, 200);
+}
+
+// Cache row array + pre-extracted data for performance with large datasets
+let _cachedRows = null;
+function _getRows() {
+    if (_cachedRows) return _cachedRows;
+    const trs = document.querySelectorAll('#detailTable tbody tr');
+    _cachedRows = Array.from(trs).map(tr => ({
+        el: tr,
+        search: tr.dataset.search || '',
+        date: (tr.dataset.date || '').substring(0, 10),
+        mosp: parseFloat(tr.dataset.mosp) || 0,
+        fobTd: tr.querySelector('.col-total-fob'),
+        taxTd: tr.querySelector('.col-total-tax'),
+        markupTd: tr.querySelector('.col-total-markup'),
+        fob: parseFloat(tr.querySelector('.col-total-fob')?.dataset?.fob) || 0,
+        hasFob: !isNaN(parseFloat(tr.querySelector('.col-total-fob')?.dataset?.fob)),
+    }));
+    return _cachedRows;
+}
+
 function filterTable() {
     const q       = (document.getElementById('searchInput')?.value || '').toLowerCase();
     const dFrom   = document.getElementById('dateFrom')?.value  || '';
     const dTo     = document.getElementById('dateTo')?.value    || '';
-    const rows    = document.querySelectorAll('#detailTable tbody tr');
+    const rows    = _getRows();
     let visible   = 0;
 
-    rows.forEach(tr => {
-        const matchText = !q || tr.dataset.search.includes(q);
-        const rowDate   = (tr.dataset.date || '').substring(0, 10); // YYYY-MM-DD
-        // Rows with no parseable date are never hidden by the date filter
-        const matchFrom = !dFrom || !rowDate || rowDate >= dFrom;
-        const matchTo   = !dTo   || !rowDate || rowDate <= dTo;
+    const tax    = parseFloat(document.getElementById('taxInput')?.value)    || 0;
+    const markup = parseFloat(document.getElementById('markupInput')?.value) || 0;
+    const tFactor = 1 + (tax    / 100);
+    const mFactor = 1 + (markup / 100);
+    const exchRate = <?= $results ? (float)($results['summary']['exchangeRate'] ?? 5.39) : 5.39 ?>;
+
+    let sumFob = 0, sumTax = 0, sumMarkup = 0;
+
+    for (let i = 0, len = rows.length; i < len; i++) {
+        const r = rows[i];
+        const matchText = !q || r.search.includes(q);
+        const matchFrom = !dFrom || !r.date || r.date >= dFrom;
+        const matchTo   = !dTo   || !r.date || r.date <= dTo;
         const show      = matchText && matchFrom && matchTo;
-        tr.style.display = show ? '' : 'none';
-        if (show) visible++;
-    });
+
+        r.el.style.display = show ? '' : 'none';
+
+        if (r.hasFob) {
+            const withTax    = r.fob * tFactor;
+            const withMarkup = withTax * mFactor;
+            if (r.taxTd)    r.taxTd.textContent    = fmtUsdJs(withTax);
+            if (r.markupTd) r.markupTd.textContent = fmtUsdJs(withMarkup);
+            if (show) { sumFob += r.fob; sumTax += withTax; sumMarkup += withMarkup; visible++; }
+        } else if (show) {
+            visible++;
+        }
+    }
 
     const rc = document.getElementById('rowCount');
     if (rc) rc.textContent = visible;
 
-    // Populate date-range hint
     updateDateHint(dFrom, dTo);
-
-    // Recalc sums from visible rows only
-    recalcTable();
+    _updateCards(sumFob, sumTax, sumMarkup, exchRate);
 }
 
 function updateDateHint(dFrom, dTo) {
@@ -1072,52 +1564,30 @@ function recalcTable() {
     const markup = parseFloat(document.getElementById('markupInput').value) || 0;
     const tFactor = 1 + (tax    / 100);
     const mFactor = 1 + (markup / 100);
-
     const exchRate = <?= $results ? (float)($results['summary']['exchangeRate'] ?? 5.39) : 5.39 ?>;
 
+    const rows = _getRows();
     let sumFob = 0, sumTax = 0, sumMarkup = 0;
 
-    document.querySelectorAll('#detailTable tbody tr').forEach(tr => {
-        const fobTd    = tr.querySelector('.col-total-fob');
-        const taxTd    = tr.querySelector('.col-total-tax');
-        const markupTd = tr.querySelector('.col-total-markup');
-        const visible  = tr.style.display !== 'none';
-
-        if (fobTd) {
-            const raw = parseFloat(fobTd.dataset.fob);
-            if (!isNaN(raw)) {
-                const withTax    = raw * tFactor;
-                const withMarkup = withTax * mFactor;
-                if (taxTd)    taxTd.textContent    = fmtUsdJs(withTax);
-                if (markupTd) markupTd.textContent = fmtUsdJs(withMarkup);
-                if (visible) { sumFob += raw; sumTax += withTax; sumMarkup += withMarkup; }
-            }
+    for (let i = 0, len = rows.length; i < len; i++) {
+        const r = rows[i];
+        const visible = r.el.style.display !== 'none';
+        if (r.hasFob) {
+            const withTax    = r.fob * tFactor;
+            const withMarkup = withTax * mFactor;
+            if (r.taxTd)    r.taxTd.textContent    = fmtUsdJs(withTax);
+            if (r.markupTd) r.markupTd.textContent = fmtUsdJs(withMarkup);
+            if (visible) { sumFob += r.fob; sumTax += withTax; sumMarkup += withMarkup; }
         }
-
-    });
-
-    // Cards — Impostos / Markup
-    const cardTax    = document.getElementById('cardTotalTax');
-    const cardTaxBrl = document.getElementById('cardTotalTaxBrl');
-    const cardMkp    = document.getElementById('cardTotalMarkup');
-    const cardMkpBrl = document.getElementById('cardTotalMarkupBrl');
-    if (cardTax) {
-        cardTax.textContent    = fmtUsdJs(sumTax);
-        cardTaxBrl.textContent = 'R$ ' + (sumTax * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
-    }
-    if (cardMkp) {
-        cardMkp.textContent    = fmtUsdJs(sumMarkup);
-        cardMkpBrl.textContent = 'R$ ' + (sumMarkup * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
     }
 
-    // Card — FOB (live)
-    const cardFob    = document.getElementById('cardTotalFob');
-    const cardFobBrl = document.getElementById('cardTotalFobBrl');
-    if (cardFob) {
+    _updateCards(sumFob, sumTax, sumMarkup, exchRate);
+}
+
+function _updateCards(sumFob, sumTax, sumMarkup, exchRate) {
         cardFob.textContent    = fmtUsdJs(sumFob);
         cardFobBrl.textContent = 'R$ ' + (sumFob * exchRate).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2});
     }
-
 }
 
 // Bootstrap Tooltips
@@ -1180,6 +1650,9 @@ const pdfData = <?= json_encode([
     'exchangeRate'   => (float)($results['summary']['exchangeRate'] ?? 5.39),
     'migrationType'  => $results['migrationType']  ?? 'mosp_csp',
     'migrationLabel' => migrationLabel($results['migrationType'] ?? 'mosp_csp'),
+    'schemaKey'      => $results['schemaKey']      ?? 'mosa_2019-11-01',
+    'schemaVersion'  => $results['schemaVersion']  ?? '2019-11-01',
+    'schemaAgreement'=> $results['schemaAgreement'] ?? 'MOSA',
     'summary' => [
         'totalRows'       => $results['summary']['totalRows'],
         'uniqueMeterIds'  => $results['summary']['uniqueMeterIds'],
@@ -1268,6 +1741,13 @@ function _doGerarPDF() {
     const W = 210, H = 297, ML = 15, MR = 15;
     const CW = W - ML - MR;
 
+    // Helper para decodificar entidades HTML
+    const decodeHtml = (html) => {
+        const txt = document.createElement('textarea');
+        txt.innerHTML = html;
+        return txt.value;
+    };
+
     const TEAL      = [0, 87, 88];
     const TEAL_DARK = [0, 48, 49];
     const BLUE      = [0, 151, 215];
@@ -1354,14 +1834,18 @@ function _doGerarPDF() {
     doc.setFont('helvetica', 'bold');
     doc.text('Analise Financeira', ML + 8, 118);
     doc.setFontSize(22);
-    doc.text(pdfData.migrationLabel || 'MOSP para Azure CSP', ML + 8, 131);
+    doc.text(decodeHtml(pdfData.migrationLabel) || 'MOSP para Azure CSP', ML + 8, 131);
 
     doc.setFontSize(12); doc.setTextColor(...GRAY);
     doc.setFont('helvetica', 'normal');
     doc.text('Comparativo de Custos via TD SYNNEX', ML + 8, 141);
+    // Schema info
+    const schemaLabel = (pdfData.schemaAgreement || 'MOSA') + ' ' + (pdfData.schemaVersion || '2019-11-01');
+    doc.setFontSize(8); doc.setTextColor(...GRAY);
+    doc.text('Dataset Schema: ' + schemaLabel, ML + 8, 149);
 
     // Client box
-    const clientBoxY = 158;
+    const clientBoxY = 162;
     doc.setFillColor(...BG);
     doc.roundedRect(ML + 8, clientBoxY, CW - 8, 28, 3, 3, 'F');
     doc.setFillColor(...TEAL); doc.rect(ML + 8, clientBoxY, 3, 28, 'F');
@@ -1478,21 +1962,19 @@ function _doGerarPDF() {
         doc.text('Principais Servicos Azure', ML, y); y += 3;
         const svcRows = svcEntries.slice(0, 7).map(([name, d]) => [
             trunc(name, 38),
-            fmtU(d.costMosp),
             fmtU(d.costCsp),
-            d.costMosp > 0 ? (((d.costCsp / d.costMosp) - 1) * 100).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1}) + '%' : '—',
             d.count + ' linhas',
         ]);
         doc.autoTable({
             startY: y,
-            head: [['Servico', 'Custo MOSP', 'Custo CSP FOB', 'Var.%', 'Linhas']],
+            head: [['Servico', 'Custo CSP FOB', 'Linhas']],
             body: svcRows,
             styles: { fontSize: 8, cellPadding: 2 },
             headStyles: { fillColor: TEAL, textColor: WHITE, fontStyle: 'bold', fontSize: 8 },
             alternateRowStyles: { fillColor: LIGHT },
             margin: { left: ML, right: MR },
             tableWidth: CW,
-            columnStyles: { 0: {cellWidth: 65}, 1: {halign:'right'}, 2: {halign:'right'}, 3: {halign:'right'}, 4: {halign:'right'} },
+            columnStyles: { 0: {cellWidth: 95}, 1: {halign:'right'}, 2: {halign:'right'} },
         });
         y = doc.lastAutoTable.finalY + 6;
     }
@@ -1598,7 +2080,7 @@ function _doGerarPDF() {
 
         const hasTax    = tax > 0;
         const hasMarkup = markup > 0;
-        const headers   = ['Recurso', 'Servico', 'Resource Group', 'Data', 'Regiao', 'MOSP', 'CSP FOB',
+        const headers   = ['Recurso', 'Servico', 'Resource Group', 'Data', 'Regiao', 'CSP FOB',
             ...(hasTax    ? ['c/ Impostos'] : []),
             ...(hasMarkup ? ['c/ Markup']   : []),
         ];
@@ -1608,7 +2090,6 @@ function _doGerarPDF() {
             trunc(r.rg,       16),
             r.date,
             trunc(r.region,   10),
-            fmtU(r.mosp),
             fmtU(r.fob),
             ...(hasTax    ? [fmtU(r.tax)]    : []),
             ...(hasMarkup ? [fmtU(r.markup)] : []),
@@ -1624,15 +2105,14 @@ function _doGerarPDF() {
             margin: { left: ML, right: MR },
             tableWidth: CW,
             columnStyles: {
-                0: {cellWidth: 32},
-                1: {cellWidth: 28},
-                2: {cellWidth: 22},
+                0: {cellWidth: 34},
+                1: {cellWidth: 30},
+                2: {cellWidth: 24},
                 3: {cellWidth: 17},
-                4: {cellWidth: 14},
-                5: {halign:'right', cellWidth: 17},
-                6: {halign:'right', cellWidth: 17},
-                ...(hasTax    ? {7: {halign:'right', cellWidth: 17}} : {}),
-                ...(hasMarkup ? {8: {halign:'right', cellWidth: 17}} : {}),
+                4: {cellWidth: 16},
+                5: {halign:'right', cellWidth: 18},
+                ...(hasTax    ? {6: {halign:'right', cellWidth: 18}} : {}),
+                ...(hasMarkup ? {7: {halign:'right', cellWidth: 18}} : {}),
             },
             didDrawPage: data => {
                 const pg = doc.getCurrentPageInfo().pageNumber;
@@ -1669,5 +2149,197 @@ function _doGerarPDF() {
 }
 </script>
 <?php endif; ?>
+
+<script>
+// ============================================================
+// SISTEMA DE TRADUÇÃO / i18n
+// ============================================================
+const translations = {
+    'pt-BR': {
+        'header.subtitle': 'Ferramentas e Calculadoras',
+        'nav.home': 'Home',
+        'nav.migration': 'Migracao Azure',
+        'breadcrumb.migration': 'Migracao Azure',
+        'breadcrumb.financial': 'Analise Financeira',
+        'title.main': 'Analise Financeira para Migracao Azure',
+        'title.description': 'Upload do export do Cost Management',
+        'label.schema': 'Schema:',
+        'label.qty': 'Qty:',
+        'alert.error': 'Erro',
+        'alert.success': 'Sucesso',
+        'form.upload': 'Upload e Analise',
+        'form.file': 'Arquivo CSV',
+        'form.selectFile': 'Selecione o arquivo',
+        'form.agreement': 'Agreement/Subscription',
+        'form.schema': 'Schema',
+        'form.clientName': 'Nome do Cliente',
+        'form.month': 'Mes Referencia',
+        'form.analyze': 'Analisar',
+        'form.analyzing': 'Analisando',
+        'summary.title': 'Resumo Geral',
+        'summary.totalRows': 'Total de Linhas',
+        'summary.uniqueMeters': 'Meters Unicos',
+        'summary.successApi': 'API OK',
+        'summary.errorApi': 'Erro API',
+        'summary.costMosp': 'Custo MOSP',
+        'summary.costCsp': 'Custo CSP FOB',
+        'summary.difference': 'Diferenca',
+        'summary.savings': 'Economia',
+        'table.resource': 'Recurso',
+        'table.service': 'Servico',
+        'table.resourceGroup': 'Resource Group',
+        'table.date': 'Data',
+        'table.region': 'Regiao',
+        'table.quantity': 'Quantidade',
+        'table.unit': 'Unidade',
+        'table.costCsp': 'Custo CSP',
+        'table.actions': 'Acoes',
+        'btn.exportCsv': 'Exportar CSV',
+        'btn.generatePdf': 'Proposta PDF',
+        'btn.reset': 'Limpar Dados',
+        'footer.confidential': 'TD SYNNEX | Documento Confidencial | Valores estimados sujeitos a alteracao',
+    },
+    'en-US': {
+        'header.subtitle': 'Tools and Calculators',
+        'nav.home': 'Home',
+        'nav.migration': 'Azure Migration',
+        'breadcrumb.migration': 'Azure Migration',
+        'breadcrumb.financial': 'Financial Analysis MOSP - CSP',
+        'title.main': 'Financial Analysis for Azure Migration',
+        'title.description': 'Upload Cost Management export',
+        'label.schema': 'Schema:',
+        'label.qty': 'Qty:',
+        'alert.error': 'Error',
+        'alert.success': 'Success',
+        'form.upload': 'Upload and Analysis',
+        'form.file': 'CSV File',
+        'form.selectFile': 'Select file',
+        'form.agreement': 'Agreement/Subscription',
+        'form.schema': 'Schema',
+        'form.clientName': 'Client Name',
+        'form.month': 'Reference Month',
+        'form.analyze': 'Analyze',
+        'form.analyzing': 'Analyzing',
+        'summary.title': 'General Summary',
+        'summary.totalRows': 'Total Rows',
+        'summary.uniqueMeters': 'Unique Meters',
+        'summary.successApi': 'API OK',
+        'summary.errorApi': 'API Error',
+        'summary.costMosp': 'MOSP Cost',
+        'summary.costCsp': 'CSP FOB Cost',
+        'summary.difference': 'Difference',
+        'summary.savings': 'Savings',
+        'table.resource': 'Resource',
+        'table.service': 'Service',
+        'table.resourceGroup': 'Resource Group',
+        'table.date': 'Date',
+        'table.region': 'Region',
+        'table.quantity': 'Quantity',
+        'table.unit': 'Unit',
+        'table.costCsp': 'CSP Cost',
+        'table.actions': 'Actions',
+        'btn.exportCsv': 'Export CSV',
+        'btn.generatePdf': 'PDF Proposal',
+        'btn.reset': 'Clear Data',
+        'footer.confidential': 'TD SYNNEX | Confidential Document | Estimated values subject to change',
+    },
+    'es-ES': {
+        'header.subtitle': 'Herramientas y Calculadoras',
+        'nav.home': 'Inicio',
+        'nav.migration': 'Migracion Azure',
+        'breadcrumb.migration': 'Migracion Azure',
+        'breadcrumb.financial': 'Analisis Financiero MOSP - CSP',
+        'title.main': 'Analisis Financiero de Migracion',
+        'title.description': 'Cargue la exportacion de Cost Management y compare costos a traves de la API publica de Microsoft.',
+        'label.schema': 'Schema:',
+        'label.qty': 'Cant:',
+        'alert.error': 'Error',
+        'alert.success': 'Exito',
+        'form.upload': 'Carga y Analisis',
+        'form.file': 'Archivo CSV',
+        'form.selectFile': 'Seleccionar archivo',
+        'form.agreement': 'Acuerdo/Suscripcion',
+        'form.schema': 'Schema',
+        'form.clientName': 'Nombre del Cliente',
+        'form.month': 'Mes Referencia',
+        'form.analyze': 'Analizar',
+        'form.analyzing': 'Analizando',
+        'summary.title': 'Resumen General',
+        'summary.totalRows': 'Total de Lineas',
+        'summary.uniqueMeters': 'Medidores Unicos',
+        'summary.successApi': 'API OK',
+        'summary.errorApi': 'Error API',
+        'summary.costMosp': 'Costo MOSP',
+        'summary.costCsp': 'Costo CSP FOB',
+        'summary.difference': 'Diferencia',
+        'summary.savings': 'Ahorro',
+        'table.resource': 'Recurso',
+        'table.service': 'Servicio',
+        'table.resourceGroup': 'Grupo de Recursos',
+        'table.date': 'Fecha',
+        'table.region': 'Region',
+        'table.quantity': 'Cantidad',
+        'table.unit': 'Unidad',
+        'table.costCsp': 'Costo CSP',
+        'table.actions': 'Acciones',
+        'btn.exportCsv': 'Exportar CSV',
+        'btn.generatePdf': 'Propuesta PDF',
+        'btn.reset': 'Limpiar Datos',
+        'footer.confidential': 'TD SYNNEX | Documento Confidencial | Valores estimados sujetos a cambios',
+    }
+};
+
+let currentLanguage = localStorage.getItem('appLanguage') || 'pt-BR';
+
+function applyTranslations(lang) {
+    const trans = translations[lang] || translations['pt-BR'];
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (trans[key]) {
+            if (el.tagName === 'INPUT' && el.type === 'submit') {
+                el.value = trans[key];
+            } else if (el.hasAttribute('placeholder')) {
+                el.placeholder = trans[key];
+            } else {
+                el.textContent = trans[key];
+            }
+        }
+    });
+}
+
+function setLanguage(lang) {
+    currentLanguage = lang;
+    localStorage.setItem('appLanguage', lang);
+    
+    const langLabels = {
+        'pt-BR': 'PT-BR',
+        'en-US': 'EN-US',
+        'es-ES': 'Español'
+    };
+    
+    const currentLangEl = document.getElementById('currentLang');
+    if (currentLangEl) {
+        currentLangEl.textContent = langLabels[lang] || 'PT-BR';
+    }
+    
+    applyTranslations(lang);
+}
+
+// Event listeners para seletor de idioma
+document.addEventListener('DOMContentLoaded', () => {
+    // Aplicar idioma salvo
+    setLanguage(currentLanguage);
+    
+    // Click nos itens do dropdown
+    document.querySelectorAll('[data-lang]').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const lang = e.target.closest('[data-lang]').getAttribute('data-lang');
+            setLanguage(lang);
+        });
+    });
+});
+</script>
+
 </body>
 </html>

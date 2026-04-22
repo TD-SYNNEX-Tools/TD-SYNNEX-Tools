@@ -1,75 +1,245 @@
-# Azure ARC vs SPLA Calculator - PHP
+# ArcCalculator - TD SYNNEX Tools
 
-Calculadora de custos para comparação entre Azure ARC Pay-As-You-Go e licenciamento SPLA tradicional para SQL Server.
+**Aplicação interna TD SYNNEX** para análise de licenciamento e migração Microsoft Azure, SQL Server e M365.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Instalar Dependências
+
+```bash
+composer install
+```
+
+### 2. Iniciar Servidor
+
+#### Opção A: Script Automático (Windows)
+```bash
+start-server.bat
+```
+
+#### Opção B: Comando Manual
+```bash
+php -S localhost:8000 -t public router.php
+```
+
+### 3. Acessar
+
+Abra seu navegador em: **http://localhost:8000/**
+
+---
 
 ## 📁 Estrutura do Projeto
 
 ```
 php-app/
-├── bin/
-│   └── php/              # Binários PHP (opcional)
-├── public/               # Arquivos públicos (document root)
-│   ├── css/
-│   │   └── style.css     # Estilos Tailwind compilados
-│   ├── js/
-│   │   └── app.js        # JavaScript (geração de PDF)
-│   ├── home.php          # Página inicial com cards
-│   ├── index.php         # Calculadora principal
-│   ├── logo.png          # Logo TD SYNNEX
-│   ├── logo_b64_full.txt # Logo em Base64
-│   └── logo_base64.txt   # Logo em Base64 (alternativo)
+├── public/               # Document root
+│   ├── index.php         # Front controller
+│   ├── assets/           # CSS, JS, Images
+│   └── uploads/
+│
 ├── src/
-│   └── Calculator.php    # Classe de cálculos
-└── templates/
-    ├── calculator_form.php  # Formulário da calculadora
-    └── layout.php           # Template principal
+│   ├── Core/             # Sistema de rotas e base
+│   ├── Features/         # Funcionalidades (5 features)
+│   ├── Shared/           # Código compartilhado
+│   ├── Templates/        # Layouts reutilizáveis
+│   └── Data/             # Dados estáticos
+│
+├── config/
+│   └── routes.php        # Definição de rotas
+│
+└── reports/              # PDFs gerados
 ```
 
-## 🚀 Como Executar
+---
 
-### Requisitos
-- PHP 8.0 ou superior
+## 🌐 Rotas Disponíveis
 
-### Iniciar Servidor de Desenvolvimento
+| Rota | Descrição |
+|------|-----------|
+| `/` | Home (Dashboard) |
+| `/azure-migration` | Página principal Azure Migration |
+| `/azure-migration/technical-analysis` | Análise Técnica de Recursos |
+| `/azure-migration/financial-analysis` | Análise Financeira MOSP vs CSP |
+| `/csp-pricing/comparison` | Comparação de Preços CSP |
+| `/sql-advisor` | SQL Licensing Advisor |
+| `/m365-migration` | Migração M365 |
+| `/cloud-partner-hub` | Cloud Partner HUB |
 
-```bash
-cd php-app
-php -S localhost:8000 -t public
+---
+
+## 🛠️ Features
+
+### 1. **Azure Migration**
+- Análise Técnica: Verifica viabilidade de migração de 16.000+ recursos Azure
+- Análise Financeira: Compara custos MOSP vs CSP usando API pública Microsoft
+
+### 2. **CSP Pricing**
+- Validação de preços CSP
+- Comparação entre modelos de contrato
+
+### 3. **SQL Licensing Advisor**
+- Compara 6 modelos de licenciamento SQL Server 2022
+- Chat IA especializado (GPT-4o)
+- Gestão de SKUs e preços
+
+### 4. **M365 Migration**
+- Processamento de faturas Partner Center
+- Normalização de dados de licenciamento
+
+### 5. **Cloud Partner HUB**
+- Dashboard centralizado
+- Acesso rápido a todas as ferramentas
+
+---
+
+## 🏗️ Arquitetura
+
+### Feature-Based Architecture
+
+Organização por funcionalidade (não por tipo de arquivo):
+
+```
+Features/
+├── AzureMigration/
+│   ├── Controllers/
+│   ├── Services/
+│   ├── Models/
+│   └── Views/
+│
+├── SqlLicensing/
+│   ├── Controllers/
+│   ├── Services/
+│   ├── Models/
+│   ├── Config/
+│   └── Views/
+│
+└── ...
 ```
 
-Acesse: http://localhost:8000/home.php
+### Vantagens
 
-## 📱 Páginas
+✅ Código relacionado agrupado  
+✅ Fácil adicionar/remover features  
+✅ Trabalho em equipe sem conflitos  
+✅ Manutenção simplificada  
 
-| Página | URL | Descrição |
-|--------|-----|-----------|
-| Home | `/home.php` | Página inicial com cards de navegação |
-| Calculadora | `/index.php` | Calculadora Azure ARC vs SPLA |
+---
 
-## ⚙️ Funcionalidades
+## 📝 Documentação
 
-- **Múltiplas Estimativas**: Suporte a abas para diferentes cenários
-- **Configuração de Preços**: Modal para ajustar preços SPLA, ARC e câmbio
-- **Geração de PDF**: Relatório completo com gráficos comparativos
-- **Cálculos em Tempo Real**: Atualização automática dos valores
+- **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Guia completo de uso e padrões
+- **[STATUS.md](STATUS.md)** - Checklist de progresso  
+- **[SUMMARY.md](SUMMARY.md)** - Resumo executivo da reorganização
 
-## 💰 Parâmetros de Cálculo
+---
 
-### Azure ARC (Pay-As-You-Go)
-- SQL Standard: $0.10/vCore/hora
-- SQL Enterprise: $0.375/vCore/hora
+## 🔧 Desenvolvimento
 
-### SPLA (Licenciamento Tradicional)
-- SQL Standard: $210/pack de 2 cores
-- SQL Enterprise: $855.47/pack de 2 cores
+### Adicionar Nova Rota
 
-## 🛠️ Tecnologias
+Edite `config/routes.php`:
 
-- **PHP 8.2** - Backend
-- **Tailwind CSS** - Estilização
-- **jsPDF** - Geração de PDF no cliente
-- **JavaScript** - Interatividade
+```php
+$router->get('/minha-rota', [MeuController::class, 'index']);
+```
+
+### Criar Novo Controller
+
+```php
+<?php
+namespace App\Features\MinhaFeature\Controllers;
+
+use App\Core\BaseController;
+use App\Core\Response;
+
+class MeuController extends BaseController
+{
+    public function index(): Response
+    {
+        return $this->view('Features/MinhaFeature/Views/index.php');
+    }
+}
+```
+
+### Estrutura de View
+
+```php
+<?php session_start(); ?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Minha Página</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <?php include __DIR__ . '/../../../Templates/components/navigation.php'; ?>
+    
+    <!-- Conteúdo -->
+    
+</body>
+</html>
+```
+
+---
+
+## 🎨 Stack Técnica
+
+- **Backend:** PHP 8.0+
+- **Frontend:** HTML5, Tailwind CSS, Vanilla JavaScript
+- **PDF:** jsPDF (client-side)
+- **Routing:** Custom Router (PSR-like)
+- **Autoload:** Composer PSR-4
+
+---
+
+## 📦 Dependências
+
+```json
+{
+    "php": ">=8.0",
+    "composer packages": "via vendor/"
+}
+```
+
+---
+
+## 🔐 Segurança
+
+- ✅ Apenas `public/` acessível via web
+- ✅ `.htaccess` protege arquivos sensíveis
+- ✅ Validação de inputs
+- ✅ Output sanitizado
+
+---
+
+## 🚢 Deploy
+
+### Apache
+
+Configure Virtual Host apontando para `public/`:
+
+```apache
+DocumentRoot "/path/to/php-app/public"
+```
+
+### Nginx
+
+```nginx
+root /path/to/php-app/public;
+try_files $uri $uri/ /index.php?$query_string;
+```
+
+---
+
+## 📞 Suporte
+
+**TD SYNNEX Internal Tools**  
+Desenvolvido para uso interno da equipe de vendas.
+
+---
 
 ## 📄 Licença
 
-Projeto interno TD SYNNEX.
+Propriedade TD SYNNEX - Uso Interno Exclusivo

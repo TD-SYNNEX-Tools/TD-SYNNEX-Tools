@@ -6,9 +6,18 @@ $vendorDir = dirname(__DIR__);
 $baseDir = dirname($vendorDir);
 
 return array(
-    'AzureMigration\\AzureResourceAnalyzer' => $baseDir . '/src/AzureResourceAnalyzer.php',
-    'AzureMigration\\FileParser' => $baseDir . '/src/FileParser.php',
-    'AzureMigration\\ReportGenerator' => $baseDir . '/src/ReportGenerator.php',
+    'App\\Features\\AzureMigration\\Services\\AzureResourceAnalyzer' => $baseDir . '/src/Features/AzureMigration/Services/AzureResourceAnalyzer.php',
+    'App\\Features\\AzureMigration\\Services\\FinancialAnalyzer' => $baseDir . '/src/Features/AzureMigration/Services/FinancialAnalyzer.php',
+    'App\\Features\\AzureMigration\\Services\\MicrosoftPricingApi' => $baseDir . '/src/Features/AzureMigration/Services/MicrosoftPricingApi.php',
+    'App\\Features\\CspPricing\\Services\\CspPriceValidator' => $baseDir . '/src/Features/CspPricing/Services/CspPriceValidator.php',
+    'App\\Features\\CspPricing\\Services\\PriceListProcessor' => $baseDir . '/src/Features/CspPricing/Services/PriceListProcessor.php',
+    'App\\Features\\M365Migration\\Services\\M365Processor' => $baseDir . '/src/Features/M365Migration/Services/M365Processor.php',
+    'App\\Features\\SqlLicensing\\Models\\LicensingModel' => $baseDir . '/src/Features/SqlLicensing/Models/LicensingModel.php',
+    'App\\Features\\SqlLicensing\\Services\\LicensingAdvisor' => $baseDir . '/src/Features/SqlLicensing/Services/LicensingAdvisor.php',
+    'App\\Features\\SqlLicensing\\Services\\LicensingComparator' => $baseDir . '/src/Features/SqlLicensing/Services/LicensingComparator.php',
+    'App\\Shared\\Services\\FileParser' => $baseDir . '/src/Shared/Services/FileParser.php',
+    'App\\Shared\\Services\\ReportGenerator' => $baseDir . '/src/Shared/Services/ReportGenerator.php',
+    'App\\Shared\\Services\\ServerLogger' => $baseDir . '/src/Shared/Services/ServerLogger.php',
     'Complex\\Complex' => $vendorDir . '/markbaker/complex/classes/src/Complex.php',
     'Complex\\Exception' => $vendorDir . '/markbaker/complex/classes/src/Exception.php',
     'Complex\\Functions' => $vendorDir . '/markbaker/complex/classes/src/Functions.php',

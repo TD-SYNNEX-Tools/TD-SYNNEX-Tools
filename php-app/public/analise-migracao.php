@@ -8,9 +8,9 @@ ini_set('log_errors', '1');
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use AzureMigration\FileParser;
-use AzureMigration\AzureResourceAnalyzer;
-use AzureMigration\ReportGenerator;
+use App\Shared\Services\FileParser;
+use App\Features\AzureMigration\Services\AzureResourceAnalyzer;
+use App\Shared\Services\ReportGenerator;
 
 $uploadDir  = __DIR__ . '/../uploads';
 $reportsDir = __DIR__ . '/../reports';
@@ -120,7 +120,7 @@ $dbStats    = $analyzer->getDatabaseStats();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Análise de Migração Azure - TD SYNNEX Tools</title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -291,29 +291,14 @@ $dbStats    = $analyzer->getDatabaseStats();
 </head>
 <body>
 
-    <!-- Header igual ao padrão da aplicação -->
-    <header class="app-header">
-        <div class="d-flex align-items-center gap-3">
-            <img src="logo.png" alt="TD SYNNEX Logo" style="height:44px; width:auto; object-fit:contain;">
-            <div>
-                <h1 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1e293b;">Tools</h1>
-                <p class="mb-0" style="font-size:.75rem; color:#64748b; font-weight:500;">Ferramentas e Calculadoras</p>
-            </div>
-        </div>
-        <nav class="d-flex align-items-center gap-3">
-            <a href="home.php" style="font-size:.85rem; font-weight:500; color:#475569; text-decoration:none;">Home</a>
-            <a href="migracao-azure.php" style="font-size:.85rem; font-weight:500; color:#2563eb; border-bottom:2px solid #2563eb; padding-bottom:2px; text-decoration:none;">Migração Azure</a>
-            <a href="sql-advisor.php" style="font-size:.85rem; font-weight:500; color:#475569; text-decoration:none;">SQL Advisor</a>
-            <a href="home.php#cloud-partner-hub" style="font-size:.85rem; font-weight:500; color:#475569; text-decoration:none;">Cloud Partner HUB</a>
-        </nav>
-    </header>
+    <?php include __DIR__ . '/../templates/topbar.php'; ?>
 
     <div class="container-fluid px-4" style="max-width:1400px; margin:0 auto;">
 
         <!-- Breadcrumb -->
-        <nav aria-label="breadcrumb" class="mb-3">
+        <nav aria-label="breadcrumb" class="mb-3" style="margin-top:16px;">
             <ol class="breadcrumb" style="font-size:.82rem;">
-                <li class="breadcrumb-item"><a href="migracao-azure.php" style="color:var(--td-blue); text-decoration:none;">Migração Azure</a></li>
+                <li class="breadcrumb-item"><a href="home.php" style="color:var(--td-blue); text-decoration:none;">Home</a></li>
                 <li class="breadcrumb-item active">Análise Técnica de Recursos</li>
             </ol>
         </nav>

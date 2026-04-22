@@ -22,5 +22,5 @@ return array(
     'DeepCopy\\' => array($vendorDir . '/myclabs/deep-copy/src/DeepCopy'),
     'Composer\\Pcre\\' => array($vendorDir . '/composer/pcre/src'),
     'Complex\\' => array($vendorDir . '/markbaker/complex/classes/src'),
-    'AzureMigration\\' => array($baseDir . '/src'),
+    'App\\' => array($baseDir . '/src'),
 );

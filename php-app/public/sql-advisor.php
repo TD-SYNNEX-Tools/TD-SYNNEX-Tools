@@ -1,7 +1,8 @@
 <?php
 // filepath: public/sql-advisor.php
 session_start();
-require_once '../src/LicensingAdvisor.php';
+require_once __DIR__ . '/../vendor/autoload.php';
+use App\Features\SqlLicensing\Services\LicensingAdvisor;
 
 // Lê preços do skus.json
 $jsonFile = __DIR__ . '/skus.json';
@@ -92,7 +93,7 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SQL Licensing Advisor - TD SYNNEX</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="assets/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -575,27 +576,8 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen font-sans text-slate-900">
+  <?php include __DIR__ . '/../templates/topbar.php'; ?>
   <div id="app" class="container mx-auto p-4 md:p-8 max-w-[1600px]">
-    
-    <!-- Header -->
-    <header class="flex flex-col md:flex-row justify-between items-center mb-8 pb-6 border-b border-slate-200">
-        <div class="flex items-center gap-4">
-            <img src="logo.png" alt="TD SYNNEX Logo" class="h-12 w-auto object-contain">
-            <div>
-                <h1 class="text-2xl font-bold text-slate-900 tracking-tight">
-                    SQL Licensing <span class="text-slate-400 font-light">Advisor</span>
-                </h1>
-                <p class="text-sm text-slate-500 font-medium">Comparador de Modelos de Licenciamento</p>
-            </div>
-        </div>
-        <div class="flex items-center gap-6">
-            <nav class="flex items-center gap-4">
-                <a href="home.php" class="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Home</a>
-                <a href="migracao-azure.php" class="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Migração Azure</a>
-                <a href="sql-advisor.php" class="text-sm font-medium text-blue-600 border-b-2 border-blue-600 pb-1">SQL Advisor</a>
-            </nav>
-        </div>
-    </header>
 
     <!-- Layout 2 colunas -->
     <div class="adv-main-grid">
@@ -811,8 +793,8 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
   </button>
 
   <!-- jsPDF -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" async></script>
-  <script src="js/app.js?v=<?php echo time(); ?>"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="assets/js/app.js?v=<?php echo time(); ?>"></script>
 
   <script>
     // ==================== ADVISOR AJAX ====================
@@ -1001,11 +983,26 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
         alert('Dados não disponíveis. Execute o cálculo primeiro.');
         return;
       }
-      if (typeof generateAdvisorPDF !== 'function') {
-        alert('Erro: Função de geração de PDF não foi carregada.');
-        return;
+      if (typeof window.generateAdvisorPDF === 'function') {
+        window.generateAdvisorPDF(window.advisorData);
+      } else if (typeof generateAdvisorPDF === 'function') {
+        generateAdvisorPDF(window.advisorData);
+      } else {
+        // Tentar carregar o script novamente
+        var s = document.createElement('script');
+        s.src = 'assets/js/app.js?v=' + Date.now();
+        s.onload = function() {
+          if (typeof generateAdvisorPDF === 'function') {
+            generateAdvisorPDF(window.advisorData);
+          } else {
+            alert('Erro: Função de geração de PDF não foi carregada. Recarregue a página (Ctrl+F5).');
+          }
+        };
+        s.onerror = function() {
+          alert('Erro ao carregar o script de PDF. Verifique a conexão e recarregue a página.');
+        };
+        document.head.appendChild(s);
       }
-      generateAdvisorPDF(window.advisorData);
     });
     let chatHistory = [];
     let chatAbortController = null;

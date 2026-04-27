@@ -1,0 +1,16 @@
+Fase 3 - Aceite e Onboarding
+
+Objetivo:
+Formalizar aprovacao da proposta e iniciar o onboarding operacional.
+
+Checklist:
+- Receber aceite formal do parceiro
+- Confirmar associacao de revendedor indireto
+- Validar cadastro dos clientes
+- Apresentar oficialmente a plataforma
+- Confirmar acessos e contatos operacionais
+
+Entregaveis:
+- Proposta aprovada
+- Cadastro operacional concluido
+- Plataforma apresentada ao parceiro

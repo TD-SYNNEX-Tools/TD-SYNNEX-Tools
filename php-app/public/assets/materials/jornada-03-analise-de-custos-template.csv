@@ -1,0 +1,4 @@
+Cliente,Tenant,SKU,Quantidade,Custo Atual,Custo Projetado,Diferenca,Observacoes
+Cliente Exemplo,tenant-exemplo.onmicrosoft.com,Microsoft 365 Business Premium,25,0,0,0,Preencher com base na Recon File
+Cliente Exemplo,tenant-exemplo.onmicrosoft.com,Microsoft 365 E3,10,0,0,0,Validar elegibilidade e vigencia
+Cliente Exemplo,tenant-exemplo.onmicrosoft.com,Power BI Pro,5,0,0,0,Conferir precificacao atual

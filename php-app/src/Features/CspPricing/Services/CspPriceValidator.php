@@ -60,7 +60,7 @@ class CspPriceValidator
         }
 
         // Carrega configuração de mapeamento
-        $config = require __DIR__ . '/config/api-field-mapping.php';
+        $config = require __DIR__ . '/../../../Shared/Config/api-field-mapping.php';
         $this->fieldMapping     = $config['fieldMapping'] ?? [];
         $this->regionMapping    = $config['regionMapping'] ?? [];
         $this->comparisonFields = $config['comparisonFields'] ?? [];
@@ -268,8 +268,10 @@ class CspPriceValidator
                 'productId'         => trim($r['productid'] ?? ''),
                 'productName'       => trim($r['productname'] ?? ''),
                 'quantity'          => $qty,
-                // Campos adicionais opcionais - ResourceLocation com fallback para location
-                'resourceLocation'  => trim($r['resourcelocation'] ?? $r['location'] ?? ''),
+                // Campos adicionais opcionais - Prefere 'location' (formato friendly: "BR South")
+                // pois é o mesmo formato retornado pela API Azure Pricing.
+                // Fallback para 'resourcelocation' (formato armRegionName: "brazilsouth").
+                'resourceLocation'  => trim($r['location'] ?? $r['resourcelocation'] ?? ''),
                 'subscriptionName'  => trim($r['subscriptionname'] ?? ''),
                 'resourceGroup'     => trim($r['resourcegroup'] ?? $r['resourcegroupname'] ?? ''),
                 'date'              => trim($r['date'] ?? $r['usagedatetime'] ?? ''),

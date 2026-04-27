@@ -21,10 +21,10 @@ class AzureResourceAnalyzer
 
     // Labels para exibição
     public const STATUS_LABELS = [
-        self::STATUS_MOVABLE => '✅ Migrável',
-        self::STATUS_MOVABLE_WITH_RESTRICTIONS => '⚠️ Migrável com Restrições',
-        self::STATUS_NOT_MOVABLE => '❌ Não Migrável',
-        self::STATUS_UNKNOWN => '❓ Desconhecido'
+        self::STATUS_MOVABLE => 'Migrável',
+        self::STATUS_MOVABLE_WITH_RESTRICTIONS => 'Migrável com Restrições',
+        self::STATUS_NOT_MOVABLE => 'Não Migrável',
+        self::STATUS_UNKNOWN => 'Desconhecido'
     ];
 
     public const STATUS_COLORS = [

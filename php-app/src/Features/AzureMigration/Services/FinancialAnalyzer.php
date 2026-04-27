@@ -137,7 +137,8 @@ class FinancialAnalyzer
                 })(),
                 // CSP exports may use ResourceGroupName instead of ResourceGroup
                 'resourceGroup'         => trim($r['resourcegroup'] ?? $r['resourcegroupname'] ?? ''),
-                'resourceLocation'      => trim($r['resourcelocation'] ?? $r['location'] ?? ''),
+                // Prioriza coluna Location (formato "BR South") para comparar com API location
+                'resourceLocation'      => trim($r['location'] ?? $r['resourcelocation'] ?? ''),
                 'productName'           => trim($r['productname']           ?? ''),
                 'productId'             => trim($r['productid']             ?? ''),
                 'meterName'             => $meterName,
@@ -280,7 +281,10 @@ class FinancialAnalyzer
                 'differencePercent' => $diffPct,
                 'priceFound'        => $priceData !== null,
                 'cspServiceName'    => $priceData['serviceName']   ?? null,
+                'cspServiceFamily'  => $priceData['serviceFamily'] ?? null,
                 'cspMeterName'      => $priceData['meterName']     ?? null,
+                'cspProductName'    => $priceData['productName']   ?? null,
+                'cspPriceType'      => $priceData['priceType']     ?? null,
                 'resourceLocation'  => $row['resourceLocation'],
                 'productId'         => $row['productId'],
                 'subscriptionId'    => $row['subscriptionId'],

@@ -433,28 +433,6 @@ $dbStats    = $analyzer->getDatabaseStats();
                         <button class="clear-filter" onclick="filterByStatus('all')"><i class="bi bi-x"></i> Limpar</button>
                     </div>
 
-                    <!-- Cost Summary Card -->
-                    <?php if (($summary['totalCost'] ?? 0) > 0): ?>
-                    <div class="mig-card mb-3">
-                        <div class="card-body p-3">
-                            <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-                                <div>
-                                    <h6 class="mb-1" style="font-weight:600; color:#1e293b;">
-                                        <i class="bi bi-currency-dollar me-2" style="color:var(--td-blue);"></i>Custo Total do Período
-                                    </h6>
-                                    <small class="text-muted">Soma dos custos de todos os recursos analisados</small>
-                                </div>
-                                <div class="text-end">
-                                    <div style="font-size:1.5rem; font-weight:700; color:#0097D7;">
-                                        <?= $summary['currency'] ?? 'USD' ?> <?= number_format($summary['totalCost'], 2, ',', '.') ?>
-                                    </div>
-                                    <small class="text-muted"><?= $summary['total'] ?> recursos únicos</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-
                     <!-- Export -->
                     <div class="mig-card mb-3">
                         <div class="card-body p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -521,7 +499,6 @@ $dbStats    = $analyzer->getDatabaseStats();
                                             <th onclick="sortTable(1,'string')">Tipo do Recurso <i class="bi bi-arrow-down-up ms-1" style="opacity:.4;font-size:.65rem;"></i></th>
                                             <th onclick="sortTable(2,'string')">Resource Group <i class="bi bi-arrow-down-up ms-1" style="opacity:.4;font-size:.65rem;"></i></th>
                                             <th onclick="sortTable(3,'status')">Status <i class="bi bi-arrow-down-up ms-1" style="opacity:.4;font-size:.65rem;"></i></th>
-                                            <th onclick="sortTable(4,'number')">Custo <i class="bi bi-arrow-down-up ms-1" style="opacity:.4;font-size:.65rem;"></i></th>
                                             <th>Observações</th>
                                             <th style="width:100px;text-align:center;">
                                                 Notas <span id="notesCountBadge" class="notes-count-badge" style="display:none;">0</span>
@@ -537,15 +514,12 @@ $dbStats    = $analyzer->getDatabaseStats();
                                                 default                      => 'unknown'
                                             };
                                             $resourceId = base64_encode($result['resourceName'] . '|' . $result['resourceType'] . '|' . $result['resourceGroup']);
-                                            $costValue = $result['cost'] ?? 0;
-                                            $currency = $result['currency'] ?? 'USD';
                                         ?>
                                         <tr data-status="<?= $dataStatus ?>"
                                             data-resource-id="<?= htmlspecialchars($resourceId) ?>"
                                             data-resource-name="<?= htmlspecialchars($result['resourceName']) ?>"
                                             data-resource-type="<?= htmlspecialchars($result['resourceType']) ?>"
-                                            data-resource-group="<?= htmlspecialchars($result['resourceGroup']) ?>"
-                                            data-cost="<?= $costValue ?>">
+                                            data-resource-group="<?= htmlspecialchars($result['resourceGroup']) ?>">
                                             <td><?= htmlspecialchars($result['resourceName']) ?></td>
                                             <td class="resource-type"><?= htmlspecialchars($result['resourceType']) ?></td>
                                             <td><?= htmlspecialchars($result['resourceGroup']) ?></td>
@@ -557,15 +531,6 @@ $dbStats    = $analyzer->getDatabaseStats();
                                                     default                     => 'status-unknown'
                                                 }; ?>
                                                 <span class="status-badge <?= $cls ?>"><?= htmlspecialchars($result['statusLabel']) ?></span>
-                                            </td>
-                                            <td class="text-end">
-                                                <?php if ($costValue > 0): ?>
-                                                <span class="cost-value" style="font-weight:500; color:#0097D7;">
-                                                    <?= $currency ?> <?= number_format($costValue, 2, ',', '.') ?>
-                                                </span>
-                                                <?php else: ?>
-                                                <span class="text-muted">-</span>
-                                                <?php endif; ?>
                                             </td>
                                             <td>
                                                 <?php if ($result['notes']): ?>
@@ -739,18 +704,6 @@ $dbStats    = $analyzer->getDatabaseStats();
             if (type === 'status') {
                 av = Object.entries(statusOrd).find(([k]) => av.includes(k))?.[1] ?? 4;
                 bv = Object.entries(statusOrd).find(([k]) => bv.includes(k))?.[1] ?? 4;
-            } else if (type === 'number') {
-                // Parse numbers with Brazilian format (1.234,56)
-                const parseNum = (v) => {
-                    if (v === '-' || v === '') return 0;
-                    // Remove currency symbols and spaces
-                    v = v.replace(/[A-Z]{3}\s*/gi, '').trim();
-                    // Convert from 1.234,56 to 1234.56
-                    v = v.replace(/\./g, '').replace(',', '.');
-                    return parseFloat(v) || 0;
-                };
-                av = parseNum(av);
-                bv = parseNum(bv);
             }
             const cmp = typeof av === 'number' ? av - bv : av.localeCompare(bv, 'pt-BR');
             return sortDir === 'asc' ? cmp : -cmp;

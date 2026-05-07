@@ -73,7 +73,6 @@ class AzureResourceAnalyzer
     public function analyzeResources(array $resources): array
     {
         $results = [];
-        $aggregatedResources = [];
         $summary = [
             'total' => 0,
             'movable' => 0,
@@ -81,49 +80,15 @@ class AzureResourceAnalyzer
             'notMovable' => 0,
             'unknown' => 0,
             'byProvider' => [],
-            'analysisDate' => date('Y-m-d H:i:s'),
-            'totalCost' => 0.0,
-            'currency' => 'USD'
+            'analysisDate' => date('Y-m-d H:i:s')
         ];
 
-        // First pass: aggregate costs by unique resource
         foreach ($resources as $resource) {
             $resourceType = $resource['ResourceType'] ?? '';
             
             if (empty($resourceType)) {
                 continue;
             }
-
-            $resourceName = $resource['ResourceName'] ?? 'N/A';
-            $resourceGroup = $resource['ResourceGroup'] ?? 'N/A';
-            
-            // Create unique key for the resource
-            $uniqueKey = strtolower($resourceType . '|' . $resourceName . '|' . $resourceGroup);
-            
-            // Parse cost value
-            $cost = $this->parseCostValue($resource['PreTaxCost'] ?? '0');
-            $currency = $resource['Currency'] ?? 'USD';
-            
-            if (!isset($aggregatedResources[$uniqueKey])) {
-                $aggregatedResources[$uniqueKey] = [
-                    'resource' => $resource,
-                    'cost' => 0.0,
-                    'currency' => $currency
-                ];
-            }
-            
-            $aggregatedResources[$uniqueKey]['cost'] += $cost;
-            
-            // Keep currency from first entry
-            if (empty($summary['currency']) && !empty($currency)) {
-                $summary['currency'] = $currency;
-            }
-        }
-
-        // Second pass: analyze aggregated resources
-        foreach ($aggregatedResources as $aggregated) {
-            $resource = $aggregated['resource'];
-            $resourceType = $resource['ResourceType'] ?? '';
 
             $analysis = $this->analyzeResourceType($resourceType);
             
@@ -140,16 +105,13 @@ class AzureResourceAnalyzer
                 'subscriptionMove' => $analysis['subscription'],
                 'regionMove' => $analysis['region'],
                 'notes' => $analysis['notes'],
-                'provider' => $this->extractProvider($resourceType),
-                'cost' => $aggregated['cost'],
-                'currency' => $aggregated['currency']
+                'provider' => $this->extractProvider($resourceType)
             ];
 
             $results[] = $result;
 
             // Atualiza o resumo
             $summary['total']++;
-            $summary['totalCost'] += $aggregated['cost'];
             
             switch ($analysis['status']) {
                 case self::STATUS_MOVABLE:
@@ -171,12 +133,10 @@ class AzureResourceAnalyzer
                 $summary['byProvider'][$provider] = [
                     'total' => 0,
                     'movable' => 0,
-                    'notMovable' => 0,
-                    'cost' => 0.0
+                    'notMovable' => 0
                 ];
             }
             $summary['byProvider'][$provider]['total']++;
-            $summary['byProvider'][$provider]['cost'] += $aggregated['cost'];
             if ($analysis['status'] === self::STATUS_MOVABLE || $analysis['status'] === self::STATUS_MOVABLE_WITH_RESTRICTIONS) {
                 $summary['byProvider'][$provider]['movable']++;
             } else {
@@ -296,48 +256,6 @@ class AzureResourceAnalyzer
     {
         $parts = explode('/', $resourceType);
         return $parts[0] ?? 'Unknown';
-    }
-
-    /**
-     * Parse cost value from various formats
-     * Handles: 0.12, 3.686.400.000.000.000, 0,12 (Brazilian format)
-     */
-    private function parseCostValue(string|float|int $value): float
-    {
-        if (is_numeric($value)) {
-            return (float) $value;
-        }
-
-        $value = trim((string) $value);
-        
-        if (empty($value)) {
-            return 0.0;
-        }
-
-        // Check if it's a large number with dots as thousand separators (e.g., 3.686.400.000.000.000)
-        // This pattern has multiple dots and no comma, typical of pt-BR large numbers
-        if (preg_match('/^\d{1,3}(\.\d{3})+$/', $value)) {
-            // It's a whole number with thousand separators
-            $value = str_replace('.', '', $value);
-            return (float) $value;
-        }
-
-        // Check for numbers with both dots and decimal (e.g., 3.686.400,50)
-        if (preg_match('/^\d{1,3}(\.\d{3})+(,\d+)?$/', $value)) {
-            // Brazilian format with thousand separators and decimal
-            $value = str_replace('.', '', $value);
-            $value = str_replace(',', '.', $value);
-            return (float) $value;
-        }
-
-        // Simple Brazilian decimal format (e.g., 0,12)
-        if (strpos($value, ',') !== false && strpos($value, '.') === false) {
-            $value = str_replace(',', '.', $value);
-            return (float) $value;
-        }
-
-        // Standard format (e.g., 0.12)
-        return (float) $value;
     }
 
     /**

@@ -266,8 +266,7 @@ return [
                 'unitofmeasure' => 'UnitOfMeasure',
             ],
             'optionalCols' => [
-                'location'         => 'Location',           // Friendly name: "BR South" (preferido para comparação com API)
-                'resourcelocation' => 'ResourceLocation',   // armRegionName: "brazilsouth"
+                'resourcelocation' => 'ResourceLocation',
                 'metercategory'    => 'MeterCategory',
                 'productname'      => 'ProductName',
                 'date'             => 'Date',

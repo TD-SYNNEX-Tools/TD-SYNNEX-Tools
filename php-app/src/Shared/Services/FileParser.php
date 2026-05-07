@@ -245,6 +245,17 @@ class FileParser
             'subscription' => 'Subscription',
             'subscription id' => 'SubscriptionId',
             'subscriptionid' => 'SubscriptionId',
+            // Cost columns
+            'pretaxcost' => 'PreTaxCost',
+            'pre tax cost' => 'PreTaxCost',
+            'cost' => 'PreTaxCost',
+            'custo' => 'PreTaxCost',
+            'currency' => 'Currency',
+            'moeda' => 'Currency',
+            'metercategory' => 'MeterCategory',
+            'meter category' => 'MeterCategory',
+            'servicename' => 'ServiceName',
+            'service name' => 'ServiceName',
         ];
 
         $normalizedData = [];

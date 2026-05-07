@@ -341,12 +341,14 @@ class ReportGenerator
     {
         return '<table class="data-table" border="0" cellpadding="0" cellspacing="0" style="border:0;border-collapse:collapse;">
             <thead style="border:0;"><tr style="border:0;">
-                <th width="18%">Nome do Recurso</th>
-                <th width="22%">Tipo</th>
-                <th width="12%">Grupo de Recursos</th>
-                <th width="12%">Status</th>
-                <th width="18%">Observações</th>
-                <th width="18%">Notas Personalizadas</th>
+                <th width="16%">Nome do Recurso</th>
+                <th width="18%">Tipo</th>
+                <th width="10%">Resource Group</th>
+                <th width="6%" style="text-align:center;">RG</th>
+                <th width="6%" style="text-align:center;">Sub</th>
+                <th width="6%" style="text-align:center;">Região</th>
+                <th width="10%">Status</th>
+                <th width="28%">Observações</th>
             </tr></thead>
             <tbody style="border:0;">';
     }
@@ -364,29 +366,45 @@ class ReportGenerator
                 'not-movable'               => 'pill-red',
                 default                     => 'pill-gray'
             };
-            $icon = match($result['status']) {
-                'movable'                   => '&#10004;',
-                'movable-with-restrictions' => '&#9888;',
-                'not-movable'               => '&#10008;',
+            $statusLabel = match($result['status']) {
+                'movable'                   => 'SIM',
+                'movable-with-restrictions' => 'PARCIAL',
+                'not-movable'               => 'NAO',
                 default                     => '?'
-            };
-            $label = match($result['status']) {
-                'movable'                   => 'Migrável',
-                'movable-with-restrictions' => 'Com Restrições',
-                'not-movable'               => 'Não Migrável',
-                default                     => 'Desconhecido'
             };
             $resourceId  = base64_encode($result['resourceName'] . '|' . $result['resourceType'] . '|' . $result['resourceGroup']);
             $customNote  = $customNotes[$resourceId] ?? '';
+
+            // Texto SIM/NAO com cores para cada tipo de migração
+            $rgMove = ($result['resourceGroupMove'] ?? false) 
+                ? '<span style="background:#d4edda;color:#155724;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">SIM</span>' 
+                : '<span style="background:#f8d7da;color:#721c24;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">NAO</span>';
+            $subMove = ($result['subscriptionMove'] ?? false) 
+                ? '<span style="background:#d4edda;color:#155724;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">SIM</span>' 
+                : '<span style="background:#f8d7da;color:#721c24;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">NAO</span>';
+            $regionMove = ($result['regionMove'] ?? false) 
+                ? '<span style="background:#d4edda;color:#155724;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">SIM</span>' 
+                : '<span style="background:#f8d7da;color:#721c24;padding:2px 4px;border-radius:2px;font-size:7px;font-weight:bold;">NAO</span>';
+
+            // Combinar notas do sistema com notas personalizadas
+            $allNotes = [];
+            if (!empty($result['notes'])) {
+                $allNotes[] = htmlspecialchars($result['notes']);
+            }
+            if (!empty($customNote)) {
+                $allNotes[] = '<em>' . htmlspecialchars($customNote) . '</em>';
+            }
+            $notesDisplay = !empty($allNotes) ? implode('<br>', $allNotes) : '-';
 
             $html .= '<tr>
                 <td>' . htmlspecialchars($result['resourceName']) . '</td>
                 <td class="cell-type">' . htmlspecialchars($result['resourceType']) . '</td>
                 <td>' . htmlspecialchars($result['resourceGroup']) . '</td>
-                <td><span class="status-pill ' . $statusClass . '">' . $icon . ' ' . $label . '</span></td>
-                <td>' . ($result['notes'] ? htmlspecialchars($result['notes']) : '-') . '</td>
-                <td' . ($customNote ? ' class="cell-note"' : '') . '>'
-                    . ($customNote ? htmlspecialchars($customNote) : '-') . '</td>
+                <td style="text-align:center;">' . $rgMove . '</td>
+                <td style="text-align:center;">' . $subMove . '</td>
+                <td style="text-align:center;">' . $regionMove . '</td>
+                <td><span class="status-pill ' . $statusClass . '">' . $statusLabel . '</span></td>
+                <td style="font-size:8px;line-height:1.3;">' . $notesDisplay . '</td>
             </tr>';
         }
         return $html;
@@ -400,12 +418,27 @@ class ReportGenerator
         return '</tbody></table>
         <div style="margin-top:30px;padding:15px;background:#f8fcfd;border:1px solid #e0e0e0;font-size:9px;">
             <strong style="color:#005758;text-transform:uppercase;">Legenda:</strong><br><br>
-            <span style="color:#2e7d32;">&#10004; Migrável</span> — Recurso pode ser movido entre resource groups e assinaturas<br>
-            <span style="color:#f57f17;">&#9888; Com Restrições</span> — Recurso pode ser movido, mas com limitações específicas<br>
-            <span style="color:#c62828;">&#10008; Não Migrável</span> — Recurso não suporta migração e precisará ser recriado
+            <table style="width:100%;border:0;" cellpadding="5" cellspacing="0">
+                <tr style="border:0;">
+                    <td style="border:0;width:50%;vertical-align:top;">
+                        <strong>Colunas de Migração (RG, Sub, Região):</strong><br><br>
+                        <span style="background:#d4edda;color:#155724;padding:2px 6px;border-radius:2px;font-weight:bold;">SIM</span> = Suportado<br><br>
+                        <span style="background:#f8d7da;color:#721c24;padding:2px 6px;border-radius:2px;font-weight:bold;">NAO</span> = Não suportado<br><br>
+                        <strong>RG</strong> = Move entre Resource Groups<br>
+                        <strong>Sub</strong> = Move entre Subscriptions<br>
+                        <strong>Região</strong> = Move entre Regiões
+                    </td>
+                    <td style="border:0;width:50%;vertical-align:top;">
+                        <strong>Status Geral:</strong><br><br>
+                        <span style="background:#d4edda;color:#155724;padding:2px 6px;border-radius:2px;font-weight:bold;">SIM</span> Migrável - Recurso pode ser movido<br><br>
+                        <span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:2px;font-weight:bold;">PARCIAL</span> Com Restrições - Movido com limitações<br><br>
+                        <span style="background:#f8d7da;color:#721c24;padding:2px 6px;border-radius:2px;font-weight:bold;">NAO</span> Não Migrável - Precisará ser recriado
+                    </td>
+                </tr>
+            </table>
         </div>
         </div>
-        <div class="footer">Gerado por Azure Migration Analyzer • TD SYNNEX • ' . date('Y') . '</div>';
+        <div class="footer">Gerado por Azure Migration Analyzer - TD SYNNEX - ' . date('Y') . '</div>';
     }
 
     /**

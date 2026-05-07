@@ -201,6 +201,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
         $results = null;
+    } elseif ($action === 'export_excel') {
+        $results = $_SESSION['financialResults'] ?? null;
+        if ($results) {
+            // Gerar Excel com verificacoes de match
+            require_once __DIR__ . '/../src/Shared/Services/FinancialExcelExporter.php';
+            $exporter = new App\Shared\Services\FinancialExcelExporter();
+            $excelResult = $exporter->generate($results);
+            if ($excelResult['success']) {
+                header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                header('Content-Disposition: attachment; filename="' . basename($excelResult['filename']) . '"');
+                header('Content-Length: ' . filesize($excelResult['path']));
+                header('Cache-Control: no-cache, no-store');
+                readfile($excelResult['path']);
+                @unlink($excelResult['path']);
+                exit;
+            } else {
+                $error = $excelResult['error'];
+            }
+        }
+        $results = null;
     } elseif ($action === 'new_analysis') {
         unset($_SESSION['financialResults']);
         header('Location: analise-financeira.php');
@@ -631,6 +651,12 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <i class="bi bi-file-earmark-arrow-down me-2" style="color:var(--td-teal);"></i>Exportar Resultado
                     </h6>
                     <div class="d-flex gap-2 flex-wrap">
+                        <form method="POST" class="d-inline">
+                            <input type="hidden" name="action" value="export_excel">
+                            <button type="submit" class="btn btn-sm btn-success">
+                                <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                            </button>
+                        </form>
                         <form method="POST" class="d-inline">
                             <input type="hidden" name="action" value="export_csv">
                             <button type="submit" class="btn btn-sm btn-outline-success">

@@ -53,4 +53,4 @@ echo Pressione Ctrl+C para parar o servidor
 echo ========================================
 echo.
 
-php -S localhost:8000 -t public router.php
+php -c php.ini -S localhost:8000 -t public router.php

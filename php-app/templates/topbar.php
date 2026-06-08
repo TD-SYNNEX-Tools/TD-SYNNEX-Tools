@@ -3,6 +3,21 @@
  * Shared topbar partial — include after <body> in every page.
  */
 $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
+
+// Initialize i18n service
+require_once __DIR__ . '/../src/Shared/Services/I18nService.php';
+$_i18n = \App\Shared\Services\I18nService::getInstance();
+$_currentLang = $_i18n->getLanguage();
+$_langNames = $_i18n->getLanguageNames();
+$_langFlags = $_i18n->getLanguageFlags();
+
+// Helper function for translations
+if (!function_exists('__')) {
+    function __($key, $params = []) {
+        global $_i18n;
+        return $_i18n->translate($key, $params);
+    }
+}
 ?>
 <style>
 /* ══════════════════════════════════════════════════════════
@@ -242,6 +257,80 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
   margin: 4px 8px;
 }
 
+/* ── Language Selector ───────────────────────────────── */
+.lang-selector {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.lang-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255,255,255,.7);
+  font-size: .82rem;
+  font-weight: 500;
+  padding: 16px 14px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  transition: all .2s;
+  font-family: inherit;
+}
+.lang-trigger:hover { color: #fff; background: rgba(255,255,255,.08); }
+.lang-trigger .lang-flag { font-size: 1.1rem; }
+.lang-trigger svg.chevron { width: 14px; height: 14px; transition: transform .2s; }
+.lang-selector:hover .lang-trigger svg.chevron { transform: rotate(180deg); }
+.lang-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,48,49,.15), 0 2px 6px rgba(0,0,0,.06);
+  padding: .5rem;
+  min-width: 160px;
+  opacity: 0;
+  visibility: hidden;
+  transition: all .2s ease;
+  pointer-events: none;
+  z-index: 200;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.lang-selector:hover .lang-dropdown {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.lang-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--charcoal);
+  font-size: .84rem;
+  font-weight: 500;
+  transition: all .15s;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.lang-option:hover {
+  background: rgba(0,87,88,.06);
+  color: var(--teal);
+}
+.lang-option.active {
+  background: rgba(0,87,88,.1);
+  color: var(--teal);
+  font-weight: 600;
+}
+.lang-option .lang-flag { font-size: 1.2rem; }
+
         /* ── About modal ─────────────────────────────────────── */
 .about-overlay {
   position: fixed;
@@ -445,12 +534,12 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
         <span>Tools</span>
     </div>
     <nav class="topbar-nav">
-        <a href="home.php"<?= $_topbar_page === 'home' ? ' class="active"' : '' ?>>Home</a>
+        <a href="home.php"<?= $_topbar_page === 'home' ? ' class="active"' : '' ?>><?= __('nav.home') ?></a>
 
         <!-- Cloud Mega Menu -->
         <div class="nav-dropdown">
             <button class="nav-trigger">
-                Cloud
+                <?= __('nav.cloud') ?>
                 <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
             </button>
             <div class="mega-menu">
@@ -460,37 +549,43 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                         <div class="vendor-icon" style="background:#e8f2fc;">
                             <svg style="width:16px;height:16px;color:#0078D4;" viewBox="0 0 24 24" fill="currentColor"><path d="M11.4 2H2v9.4h9.4V2zm0 10.6H2V22h9.4V12.6zM22 2h-9.4v9.4H22V2zm0 10.6h-9.4V22H22V12.6z"/></svg>
                         </div>
-                        <span>Microsoft</span>
+                        <span><?= __('vendors.microsoft') ?></span>
                     </div>
                     <a href="analise-financeira.php" class="mega-link">
                         <div class="ml-icon" style="background:#e8f2fc; color:var(--blue);">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg>
                         </div>
-                        <div class="ml-text">Análise Financeira<small>MOSP, CSP, Enterprise</small></div>
-                    </a>
-                    <a href="analise-migracao.php" class="mega-link">
-                        <div class="ml-icon" style="background:#e6f4f4; color:var(--teal);">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>
-                        </div>
-                        <div class="ml-text">Análise Técnica<small>Cenários MOSP/EA</small></div>
+                        <div class="ml-text"><?= __('menu.financial_analysis') ?><small><?= __('menu.financial_analysis_desc') ?></small></div>
                     </a>
                     <a href="migracao-m365.php" class="mega-link">
                         <div class="ml-icon" style="background:#fff3e8; color:#ea580c;">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
                         </div>
-                        <div class="ml-text">Migração M365 - T1<small>Tier 1 &rarr; Tier 2</small></div>
+                        <div class="ml-text"><?= __('menu.m365_migration') ?><small><?= __('menu.m365_migration_desc') ?></small></div>
+                    </a>
+                    <a href="welcome-kit-csp.php" class="mega-link">
+                        <div class="ml-icon" style="background:#fff3e8; color:#ea580c;">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" /></svg>
+                        </div>
+                        <div class="ml-text"><?= __('menu.welcome_kit_csp') ?><small><?= __('menu.welcome_kit_csp_desc') ?></small></div>
                     </a>
                     <a href="sql-advisor.php" class="mega-link">
                         <div class="ml-icon" style="background:#e8f2fc; color:var(--blue);">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
                         </div>
-                        <div class="ml-text">SQL Server Advisor<small>Comparativo de licenciamento</small></div>
+                        <div class="ml-text"><?= __('menu.sql_advisor') ?><small><?= __('menu.sql_advisor_desc') ?></small></div>
                     </a>
-                    <a href="#cloud-partner-hub" class="mega-link">
+                    <a href="comparativo-regioes.php" class="mega-link">
+                        <div class="ml-icon" style="background:#dcfce7; color:#16a34a;">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg>
+                        </div>
+                        <div class="ml-text"><?= __('menu.region_comparison') ?><small><?= __('menu.region_comparison_desc') ?></small></div>
+                    </a>
+                    <a href="cloud-partner-onboarding.php" class="mega-link">
                         <div class="ml-icon" style="background:#e6f4f4; color:var(--teal-dark);">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" /></svg>
                         </div>
-                        <div class="ml-text">Cloud Partner HUB<small>Portal de parceiros</small></div>
+                        <div class="ml-text"><?= __('menu.cloud_partner_hub') ?><small><?= __('menu.cloud_partner_hub_desc') ?></small></div>
                     </a>
                 </div>
 
@@ -500,26 +595,26 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                         <div class="vendor-icon" style="background:#fef3e8;">
                             <svg style="width:16px;height:16px;" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
                         </div>
-                        <span>Google Cloud</span>
+                        <span><?= __('vendors.google_cloud') ?></span>
                     </div>
                     <div class="mega-link" style="opacity:.45; cursor:default; pointer-events:none;">
                         <div class="ml-icon" style="background:#f5f5f7;">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="color:#b0b0b0;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
                         </div>
-                        <div class="ml-text">Em breve<small>Ferramentas GCP</small></div>
+                        <div class="ml-text"><?= __('menu.coming_soon') ?><small><?= __('menu.gcp_tools') ?></small></div>
                     </div>
 
                     <div class="mega-vendor-header" style="margin-top:16px;">
                         <div class="vendor-icon" style="background:#fff3e0;">
                             <svg style="width:16px;height:16px;color:#FF9900;" viewBox="0 0 24 24" fill="currentColor"><path d="M6.763 10.036c0 .296.032.535.088.71.064.176.144.368.256.576a.391.391 0 0 1 .064.2.36.36 0 0 1-.176.288l-.592.384a.291.291 0 0 1-.16.064c-.064 0-.128-.032-.192-.08a3.97 3.97 0 0 1-.384-.496 2.326 2.326 0 0 1-.264-.608c-.672.784-1.504 1.176-2.512 1.176-.72 0-1.296-.208-1.712-.608-.416-.4-.632-.928-.632-1.584 0-.704.248-1.272.76-1.712.512-.44 1.192-.656 2.056-.656.288 0 .576.016.88.064.304.048.608.112.928.192v-.608c0-.624-.128-1.064-.4-1.312-.264-.256-.72-.376-1.36-.376-.288 0-.584.032-.888.112a6.458 6.458 0 0 0-.888.288 2.374 2.374 0 0 1-.28.112.384.384 0 0 1-.112.016c-.16 0-.24-.112-.24-.352V5.2a.72.72 0 0 1 .08-.352c.048-.064.144-.128.304-.192.288-.128.64-.24 1.04-.336a5.316 5.316 0 0 1 1.28-.144c.976 0 1.696.224 2.144.672.448.448.672 1.136.672 2.064v2.72h.016zm-3.472 1.296c.272 0 .56-.048.864-.16.304-.112.576-.304.8-.56a1.39 1.39 0 0 0 .288-.512c.048-.192.08-.416.08-.672v-.32a6.478 6.478 0 0 0-.736-.144 6.15 6.15 0 0 0-.752-.048c-.56 0-.976.112-1.248.336-.272.224-.4.544-.4.96 0 .384.096.672.304.88.192.208.48.312.832.24h-.032zm6.88.912c-.208 0-.336-.032-.416-.112-.08-.064-.16-.208-.224-.4L7.456 5.2a1.748 1.748 0 0 1-.096-.416c0-.16.08-.256.24-.256h.928c.208 0 .352.032.424.112.08.064.144.208.208.4l1.488 5.888 1.376-5.888c.048-.208.112-.336.208-.4.08-.064.24-.112.432-.112h.752c.208 0 .352.032.432.112.08.064.16.208.208.4l1.392 5.968 1.536-5.968c.064-.208.144-.336.208-.4.08-.064.224-.112.424-.112h.88c.16 0 .256.08.256.256 0 .048-.016.096-.032.16a1.433 1.433 0 0 1-.064.272l-2.144 6.528c-.064.208-.144.336-.224.4-.08.064-.224.112-.416.112h-.816c-.208 0-.352-.032-.432-.112-.08-.08-.16-.208-.208-.416l-1.376-5.744-1.36 5.728c-.048.208-.128.336-.208.416-.08.08-.24.112-.432.112h-.816v.016zm11.008.272c-.432 0-.864-.048-1.28-.16-.416-.112-.736-.224-.944-.352-.128-.08-.208-.16-.24-.256a.622.622 0 0 1-.048-.24v-.4c0-.24.096-.352.272-.352a.69.69 0 0 1 .208.032c.064.032.16.08.272.128.368.176.768.32 1.184.416.432.096.848.144 1.28.144.672 0 1.2-.112 1.568-.352.368-.24.56-.576.56-1.008 0-.288-.096-.528-.288-.72-.192-.192-.56-.368-1.088-.528l-1.568-.48c-.784-.24-1.36-.592-1.712-1.064a2.388 2.388 0 0 1-.528-1.488c0-.432.096-.816.288-1.136.192-.32.448-.592.768-.816.32-.224.688-.384 1.104-.496a4.884 4.884 0 0 1 1.344-.176c.24 0 .48.016.736.048.24.032.48.08.704.128.208.064.416.128.608.192.192.08.336.16.432.24.128.08.224.16.272.256a.505.505 0 0 1 .064.272v.368c0 .24-.096.368-.272.368a1.252 1.252 0 0 1-.448-.16 5.463 5.463 0 0 0-2.272-.464c-.608 0-1.088.096-1.424.304-.336.208-.512.528-.512.976 0 .304.112.56.32.752.208.192.608.384 1.168.544l1.536.464c.768.24 1.328.576 1.664 1.016.336.44.496.944.496 1.504 0 .448-.096.848-.272 1.184a2.86 2.86 0 0 1-.768.88c-.336.24-.72.432-1.168.56-.464.128-.96.192-1.504.192z"/><path fill="#FF9900" d="M21.384 18.736c-2.648 1.968-6.504 3.008-9.816 3.008-4.64 0-8.824-1.712-11.984-4.56-.256-.224-.016-.528.272-.352 3.408 1.984 7.632 3.168 11.992 3.168 2.944 0 6.176-.608 9.152-1.872.448-.192.832.304.384.608z"/></svg>
                         </div>
-                        <span>AWS</span>
+                        <span><?= __('vendors.aws') ?></span>
                     </div>
                     <div class="mega-link" style="opacity:.45; cursor:default; pointer-events:none;">
                         <div class="ml-icon" style="background:#f5f5f7;">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="color:#b0b0b0;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
                         </div>
-                        <div class="ml-text">Em breve<small>Ferramentas AWS</small></div>
+                        <div class="ml-text"><?= __('menu.coming_soon') ?><small><?= __('menu.aws_tools') ?></small></div>
                     </div>
                 </div>
             </div>
@@ -528,7 +623,7 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
         <!-- Ferramentas dropdown -->
         <div class="nav-dropdown">
             <button class="nav-trigger">
-                Ferramentas
+                <?= __('nav.tools') ?>
                 <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
             </button>
             <div class="simple-dropdown">
@@ -536,26 +631,27 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                     <div class="sd-icon" style="background:#e8f2fc; color:var(--blue);">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg>
                     </div>
-                    Análise Financeira Azure
-                </a>
-                <a href="analise-migracao.php">
-                    <div class="sd-icon" style="background:#e6f4f4; color:var(--teal);">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>
-                    </div>
-                    Análise Técnica de Recursos
+                    <?= __('menu.azure_financial') ?>
                 </a>
                 <div class="sd-sep"></div>
                 <a href="sql-advisor.php">
                     <div class="sd-icon" style="background:#ede9fe; color:#7c3aed;">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
                     </div>
-                    SQL Licensing Advisor
+                    <?= __('menu.sql_licensing') ?>
                 </a>
                 <a href="sku-management.php">
                     <div class="sd-icon" style="background:#fff3e8; color:#ea580c;">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6Z" /></svg>
                     </div>
-                    Gestão de SKUs
+                    <?= __('menu.sku_management') ?>
+                </a>
+                <div class="sd-sep"></div>
+                <a href="comparativo-regioes.php">
+                    <div class="sd-icon" style="background:#dcfce7; color:#16a34a;">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg>
+                    </div>
+                    <?= __('menu.azure_regions') ?>
                 </a>
             </div>
         </div>
@@ -563,7 +659,7 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
         <!-- Recursos dropdown -->
         <div class="nav-dropdown">
             <button class="nav-trigger">
-                Recursos
+                <?= __('nav.resources') ?>
                 <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
             </button>
             <div class="simple-dropdown">
@@ -571,32 +667,49 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                     <div class="sd-icon" style="background:#e6f4f4; color:var(--teal);">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" /></svg>
                     </div>
-                    Chat IA Especialista
+                    <?= __('menu.ai_chat') ?>
                 </a>
                 <div class="sd-sep"></div>
                 <a href="guia-exportacao-custos.php">
                     <div class="sd-icon" style="background:#e8f2fc; color:var(--blue);">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>
                     </div>
-                    Guia Exportação de Custos (PDF)
+                    <?= __('menu.export_guide') ?>
                 </a>
                 <a href="assets/examples/exemplo-cost-management.csv" download>
                     <div class="sd-icon" style="background:#e8f2fc; color:var(--blue);">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
                     </div>
-                    Exemplo CSV (Cost Management)
+                    <?= __('menu.csv_example') ?>
                 </a>
             </div>
         </div>
 
+        <!-- Language Selector -->
+        <div class="lang-selector">
+            <button class="lang-trigger">
+                <span class="lang-flag"><?= $_langFlags[$_currentLang] ?? '🌐' ?></span>
+                <?= $_langNames[$_currentLang] ?? 'Language' ?>
+                <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
+            </button>
+            <div class="lang-dropdown">
+                <?php foreach ($_i18n->getAvailableLanguages() as $langCode): ?>
+                <a href="set-language.php?lang=<?= $langCode ?>" class="lang-option<?= $langCode === $_currentLang ? ' active' : '' ?>">
+                    <span class="lang-flag"><?= $_langFlags[$langCode] ?? '🌐' ?></span>
+                    <?= $_langNames[$langCode] ?? $langCode ?>
+                </a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
         <!-- Console do Servidor -->
-        <button class="topbar-console-btn" onclick="toggleConsole()" title="Console do Servidor" id="consoleToggleBtn">
+        <button class="topbar-console-btn" onclick="toggleConsole()" title="<?= __('console.title') ?>" id="consoleToggleBtn">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>
             <span class="console-badge" id="consoleBadge">0</span>
         </button>
 
         <!-- Sobre -->
-        <a href="#" id="openAbout" onclick="event.preventDefault(); document.getElementById('aboutModal').classList.add('open');">Sobre</a>
+        <a href="#" id="openAbout" onclick="event.preventDefault(); document.getElementById('aboutModal').classList.add('open');"><?= __('nav.about') ?></a>
 
     </nav>
 </header>
@@ -609,8 +722,8 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
         </button>
         <div class="about-header">
             <img src="assets/images/logo.png" alt="TD SYNNEX">
-            <h3>TD SYNNEX Tools</h3>
-            <p>Plataforma interna de ferramentas para o time de vendas Cloud</p>
+            <h3><?= __('about.title') ?></h3>
+            <p><?= __('about.description') ?></p>
         </div>
         <div class="about-body">
             <div class="about-item">
@@ -618,7 +731,7 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" /></svg>
                 </div>
                 <div>
-                    <div class="ai-label">Versão</div>
+                    <div class="ai-label"><?= __('about.version') ?></div>
                     <div class="ai-value">3.0.0</div>
                 </div>
             </div>
@@ -627,7 +740,7 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>
                 </div>
                 <div>
-                    <div class="ai-label">Stack</div>
+                    <div class="ai-label"><?= __('about.stack') ?></div>
                     <div class="ai-value">PHP 8.0+ &bull; Tailwind CSS &bull; jsPDF &bull; OpenAI GPT-4o</div>
                 </div>
             </div>
@@ -678,17 +791,17 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
     <div class="console-header">
         <div class="console-header-left">
             <div class="console-dot idle" id="consoleDot"></div>
-            <span>Server Console</span>
+            <span><?= __('console.title') ?></span>
             <span style="color:#6c7086;font-size:.7rem;" id="consoleCount">0 eventos</span>
         </div>
         <div class="console-header-actions">
-            <button onclick="clearConsoleLogs()" title="Limpar">Limpar</button>
+            <button onclick="clearConsoleLogs()" title="<?= __('console.clear') ?>"><?= __('console.clear') ?></button>
             <button onclick="toggleAutoScroll()" title="Auto-scroll" id="autoScrollBtn">Auto-scroll: ON</button>
-            <button onclick="toggleConsole()" title="Fechar">✕</button>
+            <button onclick="toggleConsole()" title="<?= __('console.close') ?>">✕</button>
         </div>
     </div>
     <div class="console-body" id="consoleBody">
-        <div class="console-empty" id="consoleEmpty">Nenhum log do servidor ainda. Execute uma analise para ver os eventos aqui.</div>
+        <div class="console-empty" id="consoleEmpty"><?= __('console.empty') ?></div>
     </div>
 </div>
 
@@ -810,15 +923,19 @@ $_topbar_page = basename($_SERVER['SCRIPT_NAME'] ?? '', '.php');
         return d.innerHTML;
     }
 
-    // Background polling even when console is closed (for badge)
+    // Background polling even when console is closed (apenas para o badge).
+    // IMPORTANTE: nao avancamos _logIndex aqui — caso contrario, quando o usuario
+    // abrir o console, os logs ja teriam sido "consumidos" e nao seriam renderizados.
+    // Usamos ?since=total apenas para descobrir a contagem total via cabecalho da resposta.
     setInterval(function() {
         if (_consoleOpen) return; // already polling
-        fetch('server-logs.php?since=' + _logIndex)
+        fetch('server-logs.php?since=0&countOnly=1')
             .then(r => r.json())
             .then(data => {
-                if (data.ok && data.logs.length > 0) {
-                    updateBadge(data.logs.length);
-                    _logIndex = data.total;
+                if (!data.ok) return;
+                const newCount = data.total - _totalLogs;
+                if (newCount > 0) {
+                    updateBadge(newCount);
                     _totalLogs = data.total;
                 }
             })

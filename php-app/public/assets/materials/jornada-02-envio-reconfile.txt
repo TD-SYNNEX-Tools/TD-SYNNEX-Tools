@@ -1,0 +1,13 @@
+Jornada 02 - Discovery - Envio da ReconFile
+
+Responsavel: Parceiro T1
+Prazo: 1 dia
+
+Objetivo:
+- Receber a base atual para avaliacao da migracao
+
+Checklist:
+- Exportar Recon File atualizada
+- Confirmar periodo da base enviada
+- Validar se o arquivo esta completo
+- Enviar a base para analise

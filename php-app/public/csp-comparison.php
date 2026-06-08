@@ -2,6 +2,9 @@
 declare(strict_types=1);
 session_start();
 
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
+
 error_reporting(E_ALL);
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
@@ -128,11 +131,11 @@ $storedFileName = $_SESSION['cspCsvFileName'] ?? null;
 $storedReport   = $_SESSION['cspReport'] ?? null;
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="<?= getHtmlLang() ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CSP Price Validation - TD SYNNEX Tools</title>
+    <title><?= __('pages.csp_comparison') ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

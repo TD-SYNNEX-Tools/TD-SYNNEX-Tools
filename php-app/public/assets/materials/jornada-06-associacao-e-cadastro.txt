@@ -1,0 +1,13 @@
+Jornada 06 - Onboarding - Associacao e Cadastro
+
+Responsavel: Parceiro + TD SYNNEX
+Prazo: 1-2 dias
+
+Objetivo:
+- Iniciar onboarding operacional e cadastrar a base necessaria
+
+Checklist:
+- Associar revendedor indireto
+- Confirmar cadastro dos clientes
+- Apresentar a plataforma
+- Validar dados operacionais

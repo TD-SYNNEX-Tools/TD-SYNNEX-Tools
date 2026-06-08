@@ -2,6 +2,9 @@
 // filepath: public/home.php
 session_start();
 
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
+
 // Lê preços do skus.json
 $jsonFile = __DIR__ . '/skus.json';
 $prices = [];
@@ -13,11 +16,11 @@ $_SESSION['prices'] = $prices;
 
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="<?= getHtmlLang() ?>">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Home - TD SYNNEX Tools</title>
+  <title><?= __('home.title') ?></title>
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -533,6 +536,65 @@ $_SESSION['prices'] = $prices;
       color: var(--gray);
       font-size: .75rem;
     }
+
+    /* ── Language Selector ──────────────────────────────── */
+    .lang-selector {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .lang-trigger {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,.1);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 8px;
+      color: rgba(255,255,255,.85);
+      font-size: .8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .lang-trigger:hover {
+      background: rgba(255,255,255,.15);
+      color: #fff;
+    }
+    .lang-flag { font-size: 1rem; }
+    .lang-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 6px;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.15);
+      min-width: 140px;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-8px);
+      transition: all .2s;
+      z-index: 100;
+      overflow: hidden;
+    }
+    .lang-selector:hover .lang-dropdown {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+    }
+    .lang-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      color: #333;
+      text-decoration: none;
+      font-size: .82rem;
+      transition: background .15s;
+    }
+    .lang-option:hover { background: #f5f5f5; }
+    .lang-option.active { background: #e6f4f4; color: var(--teal); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -567,23 +629,23 @@ $_SESSION['prices'] = $prices;
                             </div>
                             <div class="ml-text">Análise Financeira<small>MOSP, CSP, Enterprise</small></div>
                         </a>
-                        <a href="analise-migracao.php" class="mega-link">
-                            <div class="ml-icon" style="background:#e6f4f4; color:var(--teal);">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>
-                            </div>
-                            <div class="ml-text">Análise Técnica<small>Cenários MOSP/EA</small></div>
-                        </a>
                         <a href="migracao-m365.php" class="mega-link">
                             <div class="ml-icon" style="background:#fff3e8; color:#ea580c;">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
                             </div>
-                            <div class="ml-text">Migração M365 - T1<small>Tier 1 &rarr; Tier 2</small></div>
+                            <div class="ml-text">Migração M365<small>Tier 1 &rarr; Tier 2</small></div>
                         </a>
                         <a href="sql-advisor.php" class="mega-link">
                             <div class="ml-icon" style="background:#e8f2fc; color:var(--blue);">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
                             </div>
                             <div class="ml-text">SQL Server Advisor<small>Comparativo de licenciamento</small></div>
+                        </a>
+                        <a href="comparativo-regioes.php" class="mega-link">
+                            <div class="ml-icon" style="background:#fef3c7; color:#d97706;">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" /></svg>
+                            </div>
+                            <div class="ml-text">Comparativo Regiões<small>Preços por região Azure</small></div>
                         </a>
                         <a href="#cloud-partner-hub" class="mega-link">
                             <div class="ml-icon" style="background:#e6f4f4; color:var(--teal-dark);">
@@ -637,12 +699,6 @@ $_SESSION['prices'] = $prices;
                         </div>
                         Análise Financeira Azure
                     </a>
-                    <a href="analise-migracao.php">
-                        <div class="sd-icon" style="background:#e6f4f4; color:var(--teal);">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>
-                        </div>
-                        Análise Técnica de Recursos
-                    </a>
                     <div class="sd-sep"></div>
                     <a href="sql-advisor.php">
                         <div class="sd-icon" style="background:#ede9fe; color:#7c3aed;">
@@ -683,14 +739,35 @@ $_SESSION['prices'] = $prices;
                         <div class="sd-icon" style="background:#e8f2fc; color:var(--blue);">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
                         </div>
-                        Exemplo CSV (Cost Management)
+                        <?= __('menu.csv_example') ?>
                     </a>
 
                 </div>
             </div>
 
+            <!-- Language Selector -->
+            <?php
+            $langFlags = ['pt-BR' => '🇧🇷', 'en' => '🇺🇸', 'es' => '🇪🇸'];
+            $langNames = ['pt-BR' => 'Português', 'en' => 'English', 'es' => 'Español'];
+            $currentLang = getLang();
+            ?>
+            <div class="lang-selector">
+                <button class="lang-trigger">
+                    <span class="lang-flag"><?= $langFlags[$currentLang] ?? '🌐' ?></span>
+                    <?= $langNames[$currentLang] ?? 'Language' ?>
+                </button>
+                <div class="lang-dropdown">
+                    <?php foreach (['pt-BR', 'en', 'es'] as $langCode): ?>
+                    <a href="set-language.php?lang=<?= $langCode ?>" class="lang-option<?= $langCode === $currentLang ? ' active' : '' ?>">
+                        <span class="lang-flag"><?= $langFlags[$langCode] ?></span>
+                        <?= $langNames[$langCode] ?>
+                    </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
             <!-- Sobre -->
-            <a href="#" id="openAbout" onclick="event.preventDefault(); document.getElementById('aboutModal').classList.add('open');">Sobre</a>
+            <a href="#" id="openAbout" onclick="event.preventDefault(); document.getElementById('aboutModal').classList.add('open');"><?= __('nav.about') ?></a>
 
         </nav>
     </header>
@@ -698,8 +775,8 @@ $_SESSION['prices'] = $prices;
     <!-- Hero -->
     <section class="hero">
         <div class="hero-inner">
-            <h2>Ferramentas Internas</h2>
-            <p>Calculadoras, comparativos de licenciamento e utilitários de migração para o time de vendas e engenharia cloud.</p>
+            <h2><?= __('home.hero_title') ?></h2>
+            <p><?= __('home.hero_subtitle') ?></p>
         </div>
     </section>
 
@@ -762,10 +839,6 @@ $_SESSION['prices'] = $prices;
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
                                 Análise Financeira
                             </a></li>
-                            <li><a href="analise-migracao.php">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
-                                Análise Técnica (Cenários MOSP/EA)
-                            </a></li>
                         </ul>
                     </div>
                 </div>
@@ -807,20 +880,16 @@ $_SESSION['prices'] = $prices;
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
                             </svg>
                         </div>
-                        <h3 class="card-title">Migração M365 - T1</h3>
+                        <h3 class="card-title">Migração M365</h3>
                         <p class="card-desc">Ferramenta para migração de assinaturas Microsoft 365 de Tier 1 para Tier 2 (Indirect Reseller).</p>
                         <ul class="card-links">
-                            <li><a href="#">
+                            <li><a href="welcome-kit-csp.php">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                                Welcome Kit CSP
+                            </a></li>
+                            <li><a href="migracao-t1-t2.php">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
                                 Migração Tier 1 &rarr; Tier 2
-                            </a></li>
-                            <li><a href="#">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
-                                Mapeamento de SKUs M365
-                            </a></li>
-                            <li><a href="#">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
-                                Proposta Comercial M365
                             </a></li>
                         </ul>
                     </div>
@@ -829,6 +898,7 @@ $_SESSION['prices'] = $prices;
                 <!-- Card: Cloud Partner HUB -->
                 <div id="cloud-partner-hub" class="tool-card theme-hub">
                     <div class="card-accent"></div>
+                    <span class="card-badge" style="background:var(--teal); color:#fff;">NOVO</span>
                     <div class="card-body">
                         <div class="card-icon">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -836,11 +906,19 @@ $_SESSION['prices'] = $prices;
                             </svg>
                         </div>
                         <h3 class="card-title">Cloud Partner HUB</h3>
-                        <p class="card-desc">Portal de recursos e ferramentas para parceiros de nuvem.</p>
+                        <p class="card-desc">Gestão de parceiros Microsoft com análise de PCS Score, benefícios e trilhas de certificação.</p>
                         <ul class="card-links">
-                            <li><a href="#">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
-                                Acessar Portal
+                            <li><a href="cloud-partner-onboarding.php">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                                Iniciar Onboarding
+                            </a></li>
+                            <li><a href="cloud-partner-hub.php">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                                Dashboard de Parceiros
+                            </a></li>
+                            <li><a href="cloud-partner-hub.php">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                                Benefícios por Estágio Edge
                             </a></li>
                         </ul>
                     </div>

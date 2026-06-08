@@ -1,0 +1,12 @@
+Jornada 07 - Comunicacao - Associacao dos clientes
+
+Responsavel: Parceiro + Cliente
+Prazo: 3-5 dias
+
+Objetivo:
+- Concluir associacao dos clientes para viabilizar a migracao
+
+Checklist:
+- Associar tenants dos clientes
+- Validar aprovacoes necessarias
+- Confirmar prontidao para transferencia

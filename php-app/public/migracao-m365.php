@@ -2,6 +2,9 @@
 declare(strict_types=1);
 session_start();
 
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
+
 error_reporting(E_ALL);
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
@@ -86,6 +89,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error   = 'Arquivo processado não encontrado. Realize o upload novamente.';
         $results = $_SESSION['m365Results'] ?? null;
 
+    // ── Download Excel processado ─────────────────────────────────────────────
+    } elseif ($action === 'download_excel') {
+        if (!empty($_SESSION['m365Results']['outputFile'])) {
+            $outPath = $uploadDir . '/' . $_SESSION['m365Results']['outputFile'];
+            if (file_exists($outPath)) {
+                try {
+                    $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+                    $sheet = $spreadsheet->getActiveSheet();
+                    $sheet->setTitle('M365 Processado');
+
+                    // Ler o CSV e popular a planilha
+                    $csvHandle = fopen($outPath, 'r');
+                    $rowNum = 1;
+                    while (($row = fgetcsv($csvHandle)) !== false) {
+                        $colNum = 1;
+                        foreach ($row as $cellValue) {
+                            $sheet->setCellValue([$colNum, $rowNum], $cellValue);
+                            $colNum++;
+                        }
+                        $rowNum++;
+                    }
+                    fclose($csvHandle);
+
+                    // Estilizar cabeçalho
+                    $lastCol = $sheet->getHighestColumn();
+                    $headerRange = 'A1:' . $lastCol . '1';
+                    $sheet->getStyle($headerRange)->applyFromArray([
+                        'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+                        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '7C3AED']],
+                        'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER],
+                    ]);
+
+                    // Auto-ajustar largura das colunas
+                    foreach (range('A', $lastCol) as $col) {
+                        $sheet->getColumnDimension($col)->setAutoSize(true);
+                    }
+
+                    // Aplicar filtro automático
+                    $sheet->setAutoFilter('A1:' . $lastCol . ($rowNum - 1));
+
+                    // Enviar arquivo Excel
+                    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                    header('Content-Disposition: attachment; filename="m365_processado_' . date('Ymd_His') . '.xlsx"');
+                    header('Cache-Control: max-age=0');
+
+                    $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+                    $writer->save('php://output');
+                    exit;
+                } catch (Exception $e) {
+                    $error = 'Erro ao gerar arquivo Excel: ' . $e->getMessage();
+                    $results = $_SESSION['m365Results'] ?? null;
+                }
+            }
+        }
+        $error   = 'Arquivo processado não encontrado. Realize o upload novamente.';
+        $results = $_SESSION['m365Results'] ?? null;
+
     // ── Carregar lista de preços ─────────────────────────────────────────────
     } elseif ($action === 'load_pricelist' && isset($_FILES['priceFile'])) {
         $results = $_SESSION['m365Results'] ?? null;
@@ -149,11 +209,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 const HIGHLIGHT_COLS = ['SkuId', 'TermAndBillingCycle', 'ChaveM365'];
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="<?= getHtmlLang() ?>">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Migração M365 (T1) - TD SYNNEX Tools</title>
+  <title><?= __('pages.m365_migration') ?></title>
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -379,7 +439,20 @@ const HIGHLIGHT_COLS = ['SkuId', 'TermAndBillingCycle', 'ChaveM365'];
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
             <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
           </svg>
-          Baixar CSV Completo
+          Baixar CSV
+        </button>
+      </form>
+
+      <!-- Download Excel -->
+      <form method="POST" class="inline">
+        <input type="hidden" name="action" value="download_excel">
+        <button type="submit"
+                class="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-all"
+                style="background:#217346;">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          Baixar Excel
         </button>
       </form>
 
@@ -497,7 +570,7 @@ const HIGHLIGHT_COLS = ['SkuId', 'TermAndBillingCycle', 'ChaveM365'];
   <?php if ($results['totalRows'] > count($results['preview'])): ?>
   <p class="mt-3 text-xs text-center text-slate-400">
     Exibindo <?= number_format(count($results['preview']), 0, ',', '.') ?> de <?= number_format($results['totalRows'], 0, ',', '.') ?> linhas. 
-    Faça o download do CSV para obter o conjunto completo.
+    Faça o download (CSV ou Excel) para obter o conjunto completo.
   </p>
   <?php endif; ?>
 

@@ -15,4 +15,4 @@ echo ========================================
 echo.
 
 cd /d "%~dp0"
-php -S localhost:8000 -t public router.php
+php -c php.ini -S localhost:8000 -t public router.php

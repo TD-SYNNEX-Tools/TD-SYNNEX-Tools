@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 session_start();
+
+// Governança T2: valida token interno (no-op em desenvolvimento)
+require_once __DIR__ . '/../src/Shared/Services/governance-guard.php';
+
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
+
 // Helpers de tipo de migracao
 function migrationLabel(string $type): string {
     return $type === 'mpn_csp' ? 'MPN &rarr; CSP' : 'MOSP &rarr; CSP';
@@ -18,6 +25,15 @@ use App\Features\AzureMigration\Services\FinancialAnalyzer;
 use App\Features\AzureMigration\Services\MicrosoftPricingApi;
 use App\Features\AzureMigration\Services\AzureResourceAnalyzer;
 use App\Shared\Services\ServerLogger;
+use App\Shared\Services\ResultsCache;
+use App\Shared\Services\ExcelExporter;
+use App\Shared\Services\GovernanceClient;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
 
 $uploadDir = __DIR__ . '/../uploads';
 if (!is_dir($uploadDir)) {
@@ -91,7 +107,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($fileOk && $tmpPath) {
-            set_time_limit(300);
+            // Guards de runtime para CSVs grandes (ate ~500 MB).
+            // Esses ini_set sobrescrevem o php.ini caso ele nao tenha sido carregado.
+            @ini_set('memory_limit', '4096M');
+            @ini_set('max_execution_time', '1800');
+            set_time_limit(1800);
             $exchangeRate  = max(0.01, (float)($_POST['exchangeRate'] ?? 5.39));
             $clientName    = htmlspecialchars(trim((string)($_POST['clientName']     ?? '')), ENT_QUOTES);
             $refMonth      = htmlspecialchars(trim((string)($_POST['referenceMonth'] ?? '')), ENT_QUOTES);
@@ -163,16 +183,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $results['migrationLookup'] = $migLookup;
                 }
 
-                $_SESSION['financialResults'] = $results;
+                ResultsCache::put('financialResults', $results);
+                // mantem flag leve no SESSION apenas para sinalizar existencia
+                $_SESSION['hasFinancialResults'] = true;
                 $cnt = $results['summary']['totalRows'];
                 $uid = $results['summary']['uniqueMeterIds'];
                 $success = "Analise concluida! {$cnt} linhas processadas, {$uid} MeterIDs unicos consultados na API.";
+
+                // Governança T2: registra evento de uso (best-effort, no-op em DEV)
+                GovernanceClient::fromGlobals()->recordUsage('financial');
             }
 
             @unlink($tmpPath);
         }
     } elseif ($action === 'export_csv') {
-        $results = $_SESSION['financialResults'] ?? null;
+        @ini_set('memory_limit', '4096M');
+        set_time_limit(1800);
+        $results = ResultsCache::get('financialResults');
         if ($results) {
             header('Content-Type: text/csv; charset=UTF-8');
             header('Content-Disposition: attachment; filename="analise_financeira_' . date('Y-m-d') . '.csv"');
@@ -202,32 +229,203 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $results = null;
     } elseif ($action === 'export_excel') {
-        $results = $_SESSION['financialResults'] ?? null;
+        @ini_set('memory_limit', '4096M');
+        set_time_limit(1800);
+        $results   = ResultsCache::get('financialResults');
+        $taxPct    = max(0, (float)($_POST['taxPct']    ?? 0));
+        $markupPct = max(0, (float)($_POST['markupPct'] ?? 0));
+        $exchRate  = max(0.01, (float)($_POST['exchRate'] ?? $results['summary']['exchangeRate'] ?? 5.39));
+
         if ($results) {
-            // Gerar Excel com verificacoes de match
-            require_once __DIR__ . '/../src/Shared/Services/FinancialExcelExporter.php';
-            $exporter = new App\Shared\Services\FinancialExcelExporter();
-            $excelResult = $exporter->generate($results);
-            if ($excelResult['success']) {
-                header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-                header('Content-Disposition: attachment; filename="' . basename($excelResult['filename']) . '"');
-                header('Content-Length: ' . filesize($excelResult['path']));
-                header('Cache-Control: no-cache, no-store');
-                readfile($excelResult['path']);
-                @unlink($excelResult['path']);
+            $spreadsheet = ExcelExporter::buildFinancialSpreadsheet($results, $taxPct, $markupPct, $exchRate);
+            $filename = 'analise_financeira_' . date('Y-m-d') . '.xlsx';
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Cache-Control: max-age=0');
+            (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save('php://output');
+            exit;
+        }
+        $results = null;
+    } elseif ($action === 'export_tech_excel') {
+        @ini_set('memory_limit', '2048M');
+        set_time_limit(1800);
+        $results = ResultsCache::get('financialResults');
+        if ($results && !empty($results['technicalAnalysis'])) {
+            $spreadsheet = ExcelExporter::buildTechnicalSpreadsheet($results);
+            $filename = 'analise_tecnica_' . date('Y-m-d') . '.xlsx';
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Cache-Control: max-age=0');
+            (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save('php://output');
+            exit;
+        }
+        $results = null;
+    } elseif ($action === 'export_pack') {
+        @ini_set('memory_limit', '4096M');
+        set_time_limit(1800);
+        $results   = ResultsCache::get('financialResults');
+        $taxPct    = max(0, (float)($_POST['taxPct']    ?? 0));
+        $markupPct = max(0, (float)($_POST['markupPct'] ?? 0));
+        $exchRate  = max(0.01, (float)($_POST['exchRate'] ?? $results['summary']['exchangeRate'] ?? 5.39));
+
+        if ($results && class_exists('ZipArchive')) {
+            $tmp = tempnam(sys_get_temp_dir(), 'pack_') . '.zip';
+            $zip = new \ZipArchive();
+            if ($zip->open($tmp, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) === true) {
+                // 1. Financeira
+                $finXlsx = tempnam(sys_get_temp_dir(), 'fin_') . '.xlsx';
+                $fin = ExcelExporter::buildFinancialSpreadsheet($results, $taxPct, $markupPct, $exchRate);
+                (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($fin))->save($finXlsx);
+                $zip->addFile($finXlsx, 'analise_financeira.xlsx');
+
+                // 2. Tecnica (se houver)
+                $techXlsx = null;
+                if (!empty($results['technicalAnalysis'])) {
+                    $techXlsx = tempnam(sys_get_temp_dir(), 'tech_') . '.xlsx';
+                    $tech = ExcelExporter::buildTechnicalSpreadsheet($results);
+                    (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($tech))->save($techXlsx);
+                    $zip->addFile($techXlsx, 'analise_tecnica.xlsx');
+                }
+
+                // 3. MeterIDs nao encontrados (se houver)
+                $nfXlsx = null;
+                $details = $results['summary']['notFoundDetails'] ?? [];
+                if (!empty($details)) {
+                    $nfXlsx = tempnam(sys_get_temp_dir(), 'nf_') . '.xlsx';
+                    $nf = ExcelExporter::buildNotFoundSpreadsheet($details);
+                    (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($nf))->save($nfXlsx);
+                    $zip->addFile($nfXlsx, 'meterids_nao_encontrados.xlsx');
+                }
+
+                // 4. README
+                $readme = "Pack Completo - Analise de Migracao Azure\n"
+                       . "Gerado em: " . date('Y-m-d H:i:s') . "\n"
+                       . "Arquivos:\n"
+                       . " - analise_financeira.xlsx (detalhamento + resumos)\n"
+                       . ($techXlsx ? " - analise_tecnica.xlsx (viabilidade por tipo de recurso)\n" : "")
+                       . ($nfXlsx   ? " - meterids_nao_encontrados.xlsx (linhas sem preco na API)\n" : "");
+                $zip->addFromString('README.txt', $readme);
+
+                $zip->close();
+
+                // Limpa tempos individuais (zip ja contem)
+                @unlink($finXlsx);
+                if ($techXlsx) @unlink($techXlsx);
+                if ($nfXlsx)   @unlink($nfXlsx);
+
+                $filename = 'pack_completo_' . date('Y-m-d_His') . '.zip';
+                header('Content-Type: application/zip');
+                header('Content-Disposition: attachment; filename="' . $filename . '"');
+                header('Cache-Control: max-age=0');
+                header('Content-Length: ' . filesize($tmp));
+                readfile($tmp);
+                @unlink($tmp);
                 exit;
-            } else {
-                $error = $excelResult['error'];
             }
         }
         $results = null;
+    } elseif ($action === 'export_not_found') {
+        @ini_set('memory_limit', '1024M');
+        set_time_limit(600);
+        $results = ResultsCache::get('financialResults');
+        $details = $results['summary']['notFoundDetails'] ?? [];
+        if (!is_array($details) || empty($details)) {
+            $details = array_map(fn($id) => [
+                'meterId'          => $id,
+                'meterName'        => '',
+                'serviceName'      => '',
+                'resourceLocation' => '',
+                'unitOfMeasure'    => '',
+                'productName'      => '',
+                'count'            => 0,
+                'totalCost'        => 0.0,
+            ], $results['summary']['notFoundMeterIds'] ?? []);
+        }
+        if (!empty($details)) {
+            $spreadsheet = ExcelExporter::buildNotFoundSpreadsheet($details);
+            $filename = 'meterids_nao_encontrados_' . date('Y-m-d') . '.xlsx';
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Cache-Control: max-age=0');
+            (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save('php://output');
+            exit;
+        }
+        $results = null;
+    } elseif ($action === 'save_proposal') {
+        @ini_set('memory_limit', '4096M');
+        set_time_limit(600);
+        $results = ResultsCache::get('financialResults');
+        $gov = GovernanceClient::fromGlobals();
+
+        if (!$results) {
+            $error = 'Nao ha analise para salvar como proposta.';
+        } elseif (!$gov->isEnabled()) {
+            $error = 'Salvar como proposta requer acesso via portal do parceiro.';
+        } else {
+            $summary    = $results['summary'] ?? [];
+            $clientName = trim((string)($_POST['customerName'] ?? $results['clientName'] ?? ''));
+            $customerTaxId = trim((string)($_POST['customerTaxId'] ?? ''));
+            $title = trim((string)($_POST['proposalTitle'] ?? ''));
+            if ($title === '') {
+                $title = 'Analise Financeira Azure' . ($clientName !== '' ? ' - ' . $clientName : '');
+            }
+
+            // KPIs leves persistidos no SQL (result_summary JSON)
+            $resultSummary = [
+                'totalRows'         => $summary['totalRows']         ?? 0,
+                'uniqueMeterIds'    => $summary['uniqueMeterIds']    ?? 0,
+                'totalMosp'         => $summary['totalMosp']         ?? 0,
+                'totalCsp'          => $summary['totalCsp']          ?? 0,
+                'difference'        => $summary['difference']        ?? 0,
+                'differencePercent' => $summary['differencePercent'] ?? 0,
+                'exchangeRate'      => $summary['exchangeRate']      ?? 0,
+                'referenceMonth'    => $results['referenceMonth']    ?? '',
+                'migrationType'     => $results['migrationType']     ?? '',
+            ];
+
+            $proposalId = $gov->createProposal([
+                'analysisType'  => 'financial',
+                'title'         => $title,
+                'customerName'  => $clientName,
+                'customerTaxId' => $customerTaxId,
+                'totalValue'    => $summary['totalCsp'] ?? 0,
+                'resultSummary' => $resultSummary,
+            ]);
+
+            if ($proposalId === null) {
+                $error = 'Nao foi possivel registrar a proposta no portal.';
+            } else {
+                // Gera o XLSX e envia o arquivo pesado para o Blob (via API)
+                $taxPct    = max(0, (float)($_POST['taxPct']    ?? 0));
+                $markupPct = max(0, (float)($_POST['markupPct'] ?? 0));
+                $exchRate  = max(0.01, (float)($_POST['exchRate'] ?? $summary['exchangeRate'] ?? 5.39));
+                $spreadsheet = ExcelExporter::buildFinancialSpreadsheet($results, $taxPct, $markupPct, $exchRate);
+
+                $tmpXlsx = tempnam(sys_get_temp_dir(), 'prop_') . '.xlsx';
+                (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save($tmpXlsx);
+                $bytes = (string) file_get_contents($tmpXlsx);
+                @unlink($tmpXlsx);
+
+                $uploaded = $gov->uploadProposalFile(
+                    $proposalId,
+                    'analise_financeira_' . date('Y-m-d') . '.xlsx',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    $bytes
+                );
+
+                $success = $uploaded
+                    ? 'Proposta salva no portal com sucesso! Voce pode revisita-la a qualquer momento.'
+                    : 'Proposta registrada, mas o arquivo nao pode ser anexado. Tente novamente.';
+            }
+        }
     } elseif ($action === 'new_analysis') {
-        unset($_SESSION['financialResults']);
+        ResultsCache::forget('financialResults');
+        unset($_SESSION['financialResults'], $_SESSION['hasFinancialResults']);
         header('Location: analise-financeira.php');
         exit;
     }
 } else {
-    $results = $_SESSION['financialResults'] ?? null;
+    $results = ResultsCache::get('financialResults');
 }
 
 // ---- Helpers de formatacao ----
@@ -241,11 +439,11 @@ function diffClass(float $v): string { return $v < -0.001 ? 'text-success' : ($v
 function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-light)' : ($v > 0.001 ? 'var(--td-red-light)' : '#f8fafc'); }
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="<?= getHtmlLang() ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analise Financeira para Migracao Azure - TD SYNNEX Tools</title>
+    <title><?= __('pages.financial_analysis') ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -274,6 +472,18 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
             background:#fff; border:none; border-radius:10px;
             box-shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
             margin-bottom:1.25rem;
+        }
+        /* Em telas grandes, o card "wide" estende-se para a esquerda
+           "ocupando" toda a coluna de upload (col-lg-3 = 25% da row).
+           Como o margin-left percentual e relativo ao pai (col-lg-9 = 75% da row),
+           1/3 do pai = 25% da row. Sem ajuste de gutter, o card fica
+           perfeitamente alinhado a borda esquerda do card de upload. */
+        @media (min-width: 992px) {
+            .fin-card-wide {
+                margin-left: calc(-100% / 3);
+                margin-right: 0;
+                width: calc(100% + 100% / 3);
+            }
         }
         .fin-card .card-header {
             background:#fff; border-bottom:1px solid #f1f5f9;
@@ -311,6 +521,8 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
             overflow:hidden; margin-top:4px;
         }
         .breakdown-bar-fill { height:100%; border-radius:4px; background:var(--td-teal); transition:width .4s; }
+        .breakdown-item:hover { background:#f1f5f9; }
+        .breakdown-item:active { background:#e2e8f0; }
         .table-fin th { background:var(--td-teal); color:#fff; font-size:.78rem;
             text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
         .table-fin td { font-size:.82rem; vertical-align:middle; }
@@ -371,8 +583,8 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
     <nav aria-label="breadcrumb" class="mb-3" style="margin-top:16px;">
         <ol class="breadcrumb" style="font-size:.82rem;">
-            <li class="breadcrumb-item"><a href="home.php" style="color:var(--td-teal);text-decoration:none;" data-i18n="breadcrumb.home">Home</a></li>
-            <li class="breadcrumb-item active" data-i18n="breadcrumb.financial">Analise Financeira</li>
+            <li class="breadcrumb-item"><a href="home.php" style="color:var(--td-teal);text-decoration:none;"><?= __('breadcrumb.home') ?></a></li>
+            <li class="breadcrumb-item active"><?= __('breadcrumb.financial') ?></li>
         </ol>
     </nav>
 
@@ -393,10 +605,10 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
         </div>
         <div>
             <h2 class="mb-0" style="font-size:1.5rem;font-weight:700;color:#1e293b;">
-                <span data-i18n="title.main">Analise Financeira para Migracao Azure</span>
+                <?= __('financial.title') ?>
             </h2>
             <p class="mb-0" style="font-size:.85rem;color:#64748b;">
-                <span data-i18n="title.description">Upload do export do Cost Management</span>
+                <?= __('financial.subtitle') ?>
             </p>
         </div>
     </div>
@@ -471,14 +683,14 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <input type="hidden" name="migrationType" id="migrationType" value="<?= ($results['migrationType'] ?? 'mosp_csp') ?>">
 
                         <div class="mb-3">
-                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;" data-i18n="form.clientName">Cliente (opcional)</label>
+                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;"><?= __('financial.client_label') ?></label>
                             <input type="text" class="form-control form-control-sm" name="clientName"
                                    value="<?= htmlspecialchars($results['clientName'] ?? '') ?>"
-                                   placeholder="Ex: Empresa XYZ">
+                                   placeholder="<?= htmlspecialchars(__('financial.client_placeholder')) ?>">
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;">Cambio USD &rarr; BRL</label>
+                            <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;"><?= __('financial.exchange_label') ?></label>
                             <div class="input-group input-group-sm">
                                 <span class="input-group-text">R$</span>
                                 <input type="number" step="0.01" min="0.01" class="form-control" name="exchangeRate"
@@ -488,8 +700,8 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
                         <div class="upload-zone mb-3" id="dropZone" onclick="document.getElementById('fileInput').click()">
                             <i class="bi bi-file-earmark-bar-graph" style="font-size:2rem;color:#94a3b8;"></i>
-                            <p class="mt-2 mb-1" style="font-size:.85rem;color:#475569;">Arraste o CSV ou clique</p>
-                            <small class="text-muted" style="font-size:.75rem;">Formato: .csv (Cost Management Export)</small>
+                            <p class="mt-2 mb-1" style="font-size:.85rem;color:#475569;"><?= __('financial.drag_csv') ?></p>
+                            <small class="text-muted" style="font-size:.75rem;"><?= __('financial.csv_format_hint') ?></small>
                             <input type="file" id="fileInput" name="file" accept=".csv" class="d-none"
                                    onchange="handleFile(this)">
                         </div>
@@ -499,7 +711,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         </div>
 
                         <button type="submit" class="btn btn-teal btn-sm w-100" id="analyzeBtn" disabled>
-                            <i class="bi bi-search me-1"></i><span data-i18n="form.analyze">Calcular Custos CSP</span>
+                            <i class="bi bi-search me-1"></i><span><?= __('financial.analyze_btn') ?></span>
                         </button>
 
                         <!-- Progress bar de upload chunked -->
@@ -516,7 +728,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     <!-- Impostos -->
                     <div class="mb-2">
                         <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;">
-                            <i class="bi bi-receipt me-1" style="color:var(--td-teal);"></i>Impostos (%)
+                            <i class="bi bi-receipt me-1" style="color:var(--td-teal);"></i><?= __('financial.taxes_label') ?>
                         </label>
                         <div class="input-group input-group-sm">
                             <input type="number" id="taxInput" step="0.01" min="0" max="999"
@@ -530,7 +742,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     <!-- Markup -->
                     <div class="mb-3">
                         <label class="form-label" style="font-size:.82rem;font-weight:600;color:#374151;">
-                            <i class="bi bi-percent me-1" style="color:var(--td-teal);"></i>Markup (%)
+                            <i class="bi bi-percent me-1" style="color:var(--td-teal);"></i><?= __('financial.markup_label') ?>
                         </label>
                         <div class="input-group input-group-sm">
                             <input type="number" id="markupInput" step="0.1" min="0" max="500"
@@ -543,7 +755,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
                     <hr style="margin:14px 0;">
                     <p style="font-size:.78rem;font-weight:600;color:#374151;margin-bottom:6px;">
-                        <i class="bi bi-info-circle me-1" style="color:var(--td-teal);"></i>Colunas usadas na validação:
+                        <i class="bi bi-info-circle me-1" style="color:var(--td-teal);"></i><?= __('financial.validation_columns') ?>
                     </p>
                     <ul style="font-size:.76rem;color:#64748b;padding-left:1.2rem;margin-bottom:8px;">
                         <li><code>MeterID</code> &mdash; ID do medidor Azure</li>
@@ -558,7 +770,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                     </p>
 
                     <a href="assets/examples/exemplo-cost-management.csv" class="btn btn-sm btn-outline-secondary w-100" style="font-size:.78rem;">
-                        <i class="bi bi-download me-1"></i>Baixar CSV de Exemplo
+                        <i class="bi bi-download me-1"></i><?= __('financial.download_example') ?>
                     </a>
                 </div>
             </div>
@@ -614,13 +826,69 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
 
 
             <?php if ($s['notFoundCount'] > 0): ?>
+            <?php
+                $nfDetails = $s['notFoundDetails'] ?? array_map(fn($id) => [
+                    'meterId'          => $id,
+                    'meterName'        => '',
+                    'serviceName'      => '',
+                    'resourceLocation' => '',
+                    'unitOfMeasure'    => '',
+                    'count'            => 0,
+                    'totalCost'        => 0.0,
+                ], $s['notFoundMeterIds'] ?? []);
+                $nfTotalCost = array_sum(array_column($nfDetails, 'totalCost'));
+                $nfTotalRows = array_sum(array_column($nfDetails, 'count'));
+            ?>
             <div class="alert alert-warning py-2 px-3" style="font-size:.82rem;border-radius:8px;">
-                <i class="bi bi-exclamation-triangle me-1"></i>
-                <strong><?= $s['notFoundCount'] ?> MeterID(s)</strong> nao foram encontrados na API de precos da Microsoft. Os valores CSP/diferenca dessas linhas sao exibidos como &ldquo;N/D&rdquo;.
-                <details class="mt-1">
-                    <summary style="cursor:pointer;font-size:.78rem;">Ver IDs nao encontrados</summary>
-                    <div class="mt-1" style="font-family:monospace;font-size:.75rem;word-break:break-all;">
-                        <?= implode('<br>', array_map('htmlspecialchars', $s['notFoundMeterIds'])) ?>
+                <div class="d-flex align-items-start justify-content-between gap-2 flex-wrap">
+                    <div>
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <strong><?= $s['notFoundCount'] ?> MeterID(s)</strong> nao foram encontrados na API de precos da Microsoft.
+                        <span class="text-muted">
+                            (<?= $nfTotalRows ?> linha(s) afetada(s), custo MOSP impactado:
+                            <strong><?= fmtUsd($nfTotalCost) ?></strong>)
+                        </span>
+                        <div class="mt-1" style="font-size:.76rem;color:#78350f;">
+                            <i class="bi bi-info-circle me-1"></i>
+                            Causas comuns: SKU descontinuado pela Microsoft, item de Marketplace/3rd-party, ou plano privado (EA/MCA).
+                        </div>
+                    </div>
+                    <form method="POST" class="d-inline m-0">
+                        <input type="hidden" name="action" value="export_not_found">
+                        <button type="submit" class="btn btn-sm btn-warning" style="white-space:nowrap;">
+                            <i class="bi bi-file-earmark-excel me-1"></i>Exportar lista (Excel)
+                        </button>
+                    </form>
+                </div>
+                <details class="mt-2">
+                    <summary style="cursor:pointer;font-size:.78rem;">Ver detalhes (<?= count($nfDetails) ?> item(s))</summary>
+                    <div class="table-responsive mt-2" style="max-height:300px;overflow-y:auto;border-radius:6px;">
+                        <table class="table table-sm mb-0" style="font-size:.75rem;background:#fff;">
+                            <thead style="position:sticky;top:0;background:#fef3c7;">
+                                <tr>
+                                    <th>MeterID</th>
+                                    <th>Meter Name</th>
+                                    <th>Servico</th>
+                                    <th>Regiao</th>
+                                    <th>UoM</th>
+                                    <th class="text-end">Linhas</th>
+                                    <th class="text-end">Custo MOSP</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($nfDetails as $nf): ?>
+                                <tr>
+                                    <td style="font-family:monospace;font-size:.7rem;"><?= htmlspecialchars($nf['meterId']) ?></td>
+                                    <td><?= htmlspecialchars($nf['meterName'] ?: '—') ?></td>
+                                    <td><?= htmlspecialchars($nf['serviceName'] ?: '—') ?></td>
+                                    <td><?= htmlspecialchars($nf['resourceLocation'] ?: '—') ?></td>
+                                    <td><?= htmlspecialchars($nf['unitOfMeasure'] ?: '—') ?></td>
+                                    <td class="text-end"><?= (int)($nf['count'] ?? 0) ?></td>
+                                    <td class="text-end"><?= fmtUsd((float)($nf['totalCost'] ?? 0)) ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
                     </div>
                 </details>
             </div>
@@ -651,21 +919,33 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <i class="bi bi-file-earmark-arrow-down me-2" style="color:var(--td-teal);"></i>Exportar Resultado
                     </h6>
                     <div class="d-flex gap-2 flex-wrap">
-                        <form method="POST" class="d-inline">
+                        <form method="POST" class="d-inline" id="formExportExcel">
                             <input type="hidden" name="action" value="export_excel">
-                            <button type="submit" class="btn btn-sm btn-success">
-                                <i class="bi bi-file-earmark-excel me-1"></i>Excel
-                            </button>
-                        </form>
-                        <form method="POST" class="d-inline">
-                            <input type="hidden" name="action" value="export_csv">
+                            <input type="hidden" name="taxPct" id="taxPctExcel" value="0">
+                            <input type="hidden" name="markupPct" id="markupPctExcel" value="0">
+                            <input type="hidden" name="exchRate" id="exchRateExcel" value="<?= htmlspecialchars((string)($results['summary']['exchangeRate'] ?? '5.39')) ?>">
                             <button type="submit" class="btn btn-sm btn-outline-success">
-                                <i class="bi bi-file-earmark-spreadsheet me-1"></i><span data-i18n="btn.exportCsv">CSV</span>
+                                <i class="bi bi-file-earmark-excel me-1"></i>Excel
                             </button>
                         </form>
                         <button type="button" class="btn btn-sm btn-teal" onclick="gerarPropostaPDF()" id="btnPdf">
                             <i class="bi bi-file-earmark-pdf me-1"></i><span data-i18n="btn.generatePdf">Proposta PDF</span>
                         </button>
+                        <form method="POST" class="d-inline" id="formExportPack">
+                            <input type="hidden" name="action" value="export_pack">
+                            <input type="hidden" name="taxPct" id="taxPctPack" value="0">
+                            <input type="hidden" name="markupPct" id="markupPctPack" value="0">
+                            <input type="hidden" name="exchRate" id="exchRatePack" value="<?= htmlspecialchars((string)($results['summary']['exchangeRate'] ?? '5.39')) ?>">
+                            <button type="submit" class="btn btn-sm" style="background:linear-gradient(135deg,#002829,#005758);color:#fff;border:none;">
+                                <i class="bi bi-archive-fill me-1"></i>Pack Completo (ZIP)
+                            </button>
+                        </form>
+                        <?php if (!empty($GLOBALS['gov_user']['token'])): ?>
+                        <button type="button" class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none;"
+                                data-bs-toggle="modal" data-bs-target="#saveProposalModal">
+                            <i class="bi bi-cloud-arrow-up me-1"></i>Salvar como Proposta
+                        </button>
+                        <?php endif; ?>
                         <form method="POST" class="d-inline">
                             <input type="hidden" name="action" value="new_analysis">
                             <button type="submit" class="btn btn-sm btn-outline-primary"
@@ -677,16 +957,62 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                 </div>
             </div>
 
+            <?php if (!empty($GLOBALS['gov_user']['token'])): ?>
+            <!-- Modal: Salvar como Proposta (governança T2) -->
+            <div class="modal fade" id="saveProposalModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <form method="POST">
+                            <input type="hidden" name="action" value="save_proposal">
+                            <input type="hidden" name="exchRate" value="<?= htmlspecialchars((string)($results['summary']['exchangeRate'] ?? '5.39')) ?>">
+                            <div class="modal-header">
+                                <h5 class="modal-title"><i class="bi bi-cloud-arrow-up me-2"></i>Salvar como Proposta</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p class="text-muted small mb-3">
+                                    A proposta ficara registrada no portal e podera ser revisitada a qualquer momento.
+                                    O arquivo Excel sera armazenado com seguranca.
+                                </p>
+                                <div class="mb-3">
+                                    <label class="form-label">Titulo da proposta</label>
+                                    <input type="text" class="form-control" name="proposalTitle"
+                                           value="Analise Financeira Azure<?= !empty($results['clientName']) ? ' - ' . htmlspecialchars($results['clientName']) : '' ?>">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Cliente final</label>
+                                    <input type="text" class="form-control" name="customerName"
+                                           value="<?= htmlspecialchars((string)($results['clientName'] ?? '')) ?>">
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">CNPJ do cliente <span class="text-muted">(opcional)</span></label>
+                                    <input type="text" class="form-control" name="customerTaxId" placeholder="00.000.000/0000-00">
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="bi bi-check-lg me-1"></i>Salvar Proposta
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- Breakdowns -->
             <div class="row g-3 mb-3">
                 <!-- Por Servico -->
                 <div class="col-md-4">
                     <div class="fin-card h-100">
-                        <div class="card-header"><i class="bi bi-grid me-2"></i>Por Servico</div>
+                        <div class="card-header"><i class="bi bi-grid me-2"></i><?= __('financial.by_service') ?></div>
                         <div class="card-body p-3">
                             <?php foreach (array_slice($s['byService'], 0, 8, true) as $svcName => $svcData): ?>
                             <?php $pct = $s['totalCsp'] > 0 ? ($svcData['costCsp'] / $s['totalCsp']) * 100 : 0; ?>
-                            <div class="mb-3">
+                            <div class="mb-3 breakdown-item" style="cursor:pointer;padding:4px 6px;margin:-4px -6px;border-radius:6px;transition:background .15s;" 
+                                 onclick="applyBreakdownFilter('service', '<?= htmlspecialchars(addslashes($svcName)) ?>')" 
+                                 title="Clique para filtrar por este serviço">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <span style="font-size:.82rem;font-weight:500;color:var(--td-dark);"><?= htmlspecialchars($svcName) ?></span>
                                     <div class="text-end">
@@ -700,7 +1026,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                 <div class="breakdown-bar">
                                     <div class="breakdown-bar-fill" style="width:<?= min(100, $pct) ?>%;"></div>
                                 </div>
-                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% do total CSP &middot; <?= $svcData['count'] ?> linha(s)</div>
+                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% <?= __('financial.of_total_csp') ?> &middot; <?= $svcData['count'] ?> <?= __('financial.lines') ?></div>
                             </div>
                             <?php endforeach; ?>
                         </div>
@@ -710,11 +1036,13 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                 <!-- Por Resource Group -->
                 <div class="col-md-4">
                     <div class="fin-card h-100">
-                        <div class="card-header"><i class="bi bi-folder me-2"></i>Por Resource Group</div>
+                        <div class="card-header"><i class="bi bi-folder me-2"></i><?= __('financial.by_rg') ?></div>
                         <div class="card-body p-3">
                             <?php foreach (array_slice($s['byResourceGroup'], 0, 8, true) as $rgName => $rgData): ?>
                             <?php $pct = $s['totalCsp'] > 0 ? ($rgData['costCsp'] / $s['totalCsp']) * 100 : 0; ?>
-                            <div class="mb-3">
+                            <div class="mb-3 breakdown-item" style="cursor:pointer;padding:4px 6px;margin:-4px -6px;border-radius:6px;transition:background .15s;" 
+                                 onclick="applyBreakdownFilter('rg', '<?= htmlspecialchars(addslashes($rgName)) ?>')" 
+                                 title="Clique para filtrar por este Resource Group">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <span style="font-size:.82rem;font-weight:500;color:var(--td-dark);"><?= htmlspecialchars($rgName) ?></span>
                                     <div class="text-end">
@@ -728,7 +1056,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                 <div class="breakdown-bar">
                                     <div class="breakdown-bar-fill" style="width:<?= min(100, $pct) ?>%;background:#0097D7;"></div>
                                 </div>
-                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% do total CSP &middot; <?= $rgData['count'] ?> linha(s)</div>
+                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% <?= __('financial.of_total_csp') ?> &middot; <?= $rgData['count'] ?> <?= __('financial.lines') ?></div>
                             </div>
                             <?php endforeach; ?>
                         </div>
@@ -738,20 +1066,22 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                 <!-- Por Assinatura -->
                 <div class="col-md-4">
                     <div class="fin-card h-100">
-                        <div class="card-header"><i class="bi bi-building me-2"></i>Por Assinatura</div>
+                        <div class="card-header"><i class="bi bi-building me-2"></i><?= __('financial.by_subscription') ?></div>
                         <div class="card-body p-3">
                             <?php if (count($s['bySubscription']) <= 1 && array_key_first($s['bySubscription']) === 'Sem Assinatura'): ?>
                             <div class="text-center py-4" style="color:#94a3b8;font-size:.82rem;">
                                 <i class="bi bi-check-circle" style="font-size:1.5rem;color:#0097D7;display:block;margin-bottom:.5rem;"></i>
-                                Cliente possui apenas uma assinatura Azure.
+                                <?= __('financial.single_subscription') ?>
                             </div>
                             <?php else: ?>
                             <?php foreach (array_slice($s['bySubscription'], 0, 8, true) as $subName => $subData): ?>
                             <?php $pct = $s['totalCsp'] > 0 ? ($subData['costCsp'] / $s['totalCsp']) * 100 : 0; ?>
-                            <div class="mb-3">
+                            <div class="mb-3 breakdown-item" style="cursor:pointer;padding:4px 6px;margin:-4px -6px;border-radius:6px;transition:background .15s;" 
+                                 onclick="applyBreakdownFilter('subscription', '<?= htmlspecialchars(addslashes($subName)) ?>')" 
+                                 title="Clique para filtrar por esta assinatura">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <div style="min-width:0;">
-                                        <div style="font-size:.82rem;font-weight:500;color:var(--td-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="<?= htmlspecialchars($subName) ?>"><?= htmlspecialchars($subName) ?></div>
+                                        <div style="font-size:.82rem;font-weight:500;color:var(--td-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;"><?= htmlspecialchars($subName) ?></div>
                                         <?php if (!empty($subData['subscriptionId'])): ?>
                                         <div style="font-size:.68rem;color:#94a3b8;font-family:monospace;"><?= htmlspecialchars(substr($subData['subscriptionId'], 0, 18)) ?>...</div>
                                         <?php endif; ?>
@@ -767,7 +1097,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                                 <div class="breakdown-bar">
                                     <div class="breakdown-bar-fill" style="width:<?= min(100, $pct) ?>%;background:#82C341;"></div>
                                 </div>
-                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% do total CSP &middot; <?= $subData['count'] ?> linha(s)</div>
+                                <div style="font-size:.72rem;color:#94a3b8;"><?= number_format($pct,1) ?>% <?= __('financial.of_total_csp') ?> &middot; <?= $subData['count'] ?> <?= __('financial.lines') ?></div>
                             </div>
                             <?php endforeach; ?>
                             <?php endif; ?>
@@ -812,24 +1142,121 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                 }
                 $minDate_ = $allDates_ ? min($allDates_) : '';
                 $maxDate_ = $allDates_ ? max($allDates_) : '';
+                
+                // Coletar listas únicas para filtros (Serviço, Resource Group, Assinatura)
+                $filterServices_ = [];
+                $filterResourceGroups_ = [];
+                $filterSubscriptions_ = [];
+                foreach ($results['results'] as $row_) {
+                    $svc = trim($row_['meterCategory'] ?? $row_['serviceFamily'] ?? '');
+                    $rg = trim($row_['resourceGroup'] ?? '');
+                    $sub = trim($row_['subscriptionName'] ?? '');
+                    if ($svc !== '' && !isset($filterServices_[$svc])) $filterServices_[$svc] = true;
+                    if ($rg !== '' && !isset($filterResourceGroups_[$rg])) $filterResourceGroups_[$rg] = true;
+                    if ($sub !== '' && !isset($filterSubscriptions_[$sub])) $filterSubscriptions_[$sub] = true;
+                }
+                ksort($filterServices_);
+                ksort($filterResourceGroups_);
+                ksort($filterSubscriptions_);
             ?>
-            <div class="fin-card">
+            <div class="fin-card fin-card-wide">
                 <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <span><i class="bi bi-table me-2"></i>Detalhamento Linha a Linha</span>
+                    <span><i class="bi bi-table me-2"></i><?= __('financial.line_detail') ?></span>
                     <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <!-- Filtro de Data -->
                         <div class="d-flex align-items-center gap-1" style="font-size:.8rem;">
-                            <label style="color:#94a3b8;white-space:nowrap;margin:0;"><i class="bi bi-calendar-range me-1"></i>De</label>
-                            <input type="date" id="dateFrom" class="form-control form-control-sm" style="width:140px;" onchange="filterTable()"
+                            <label style="color:#94a3b8;white-space:nowrap;margin:0;"><i class="bi bi-calendar-range me-1"></i><?= __('financial.date_from') ?></label>
+                            <input type="date" id="dateFrom" class="form-control form-control-sm" style="width:130px;" onchange="filterTable()"
                                    value="<?= htmlspecialchars($minDate_) ?>" min="<?= htmlspecialchars($minDate_) ?>" max="<?= htmlspecialchars($maxDate_) ?>">
-                            <label style="color:#94a3b8;margin:0;">Até</label>
-                            <input type="date" id="dateTo" class="form-control form-control-sm" style="width:140px;" onchange="filterTable()"
+                            <label style="color:#94a3b8;margin:0;"><?= __('financial.date_to') ?></label>
+                            <input type="date" id="dateTo" class="form-control form-control-sm" style="width:130px;" onchange="filterTable()"
                                    value="<?= htmlspecialchars($maxDate_) ?>" min="<?= htmlspecialchars($minDate_) ?>" max="<?= htmlspecialchars($maxDate_) ?>">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="clearDateFilter()" title="Limpar filtro de data" style="padding:2px 8px;">
-                                <i class="bi bi-x"></i>
-                            </button>
                         </div>
-                        <input type="text" id="searchInput" class="form-control form-control-sm" style="width:180px;"
-                               placeholder="Filtrar recurso..." oninput="debouncedFilter()">
+                        <!-- Filtro por Serviço -->
+                        <select id="filterService" class="form-select form-select-sm" style="width:150px;font-size:.8rem;" onchange="filterTable()">
+                            <option value=""><?= __('financial.all_services') ?></option>
+                            <?php foreach (array_keys($filterServices_) as $svc): ?>
+                            <option value="<?= htmlspecialchars($svc) ?>"><?= htmlspecialchars($svc) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <!-- Filtro por Resource Group -->
+                        <select id="filterResourceGroup" class="form-select form-select-sm" style="width:140px;font-size:.8rem;" onchange="filterTable()">
+                            <option value=""><?= __('financial.all_rgs') ?></option>
+                            <?php foreach (array_keys($filterResourceGroups_) as $rg): ?>
+                            <option value="<?= htmlspecialchars($rg) ?>"><?= htmlspecialchars($rg) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <!-- Filtro por Assinatura -->
+                        <select id="filterSubscription" class="form-select form-select-sm" style="width:150px;font-size:.8rem;" onchange="filterTable()">
+                            <option value=""><?= __('financial.all_subscriptions') ?></option>
+                            <?php foreach (array_keys($filterSubscriptions_) as $sub): ?>
+                            <option value="<?= htmlspecialchars($sub) ?>"><?= htmlspecialchars($sub) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <!-- Limpar filtros -->
+                        <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()" title="<?= htmlspecialchars(__('financial.clear_filters')) ?>" style="padding:2px 8px;">
+                            <i class="bi bi-x-circle"></i>
+                        </button>
+                        <!-- Seletor de colunas -->
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle d-flex align-items-center gap-1"
+                                    type="button" id="colChooserBtn"
+                                    data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                                    aria-expanded="false" title="Mostrar/ocultar colunas">
+                                <i class="bi bi-layout-three-columns"></i>
+                                <span style="font-size:.75rem;"><?= __('financial.columns') ?></span>
+                                <span class="badge rounded-pill" id="colChooserBadge"
+                                      style="background:#005758;color:#fff;font-size:.65rem;padding:2px 6px;">15/15</span>
+                            </button>
+                            <div class="dropdown-menu dropdown-menu-end shadow-lg border-0 p-0"
+                                 style="min-width:340px;max-width:340px;border-radius:12px;overflow:hidden;">
+                                <!-- Header -->
+                                <div style="background:linear-gradient(135deg,#005758,#003031);color:#fff;padding:14px 16px;">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <div style="font-weight:600;font-size:.9rem;">
+                                                <i class="bi bi-layout-three-columns me-1"></i>Personalizar Colunas
+                                            </div>
+                                            <div style="font-size:.72rem;opacity:.85;margin-top:2px;">
+                                                Selecione as colunas que deseja exibir
+                                            </div>
+                                        </div>
+                                        <span class="badge bg-light text-dark" id="colChooserCountHeader" style="font-size:.7rem;">15 / 15</span>
+                                    </div>
+                                </div>
+                                <!-- Search -->
+                                <div style="padding:10px 14px 6px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text bg-white border-end-0" style="padding:0 8px;">
+                                            <i class="bi bi-search" style="color:#94a3b8;font-size:.8rem;"></i>
+                                        </span>
+                                        <input type="text" id="colChooserSearch" class="form-control form-control-sm border-start-0 ps-0"
+                                               placeholder="Filtrar coluna..." autocomplete="off" style="font-size:.78rem;">
+                                    </div>
+                                </div>
+                                <!-- Lista de colunas (agrupada) -->
+                                <div id="colChooserList" style="max-height:340px;overflow-y:auto;padding:6px 0;">
+                                    <!-- Preenchido por JS -->
+                                </div>
+                                <!-- Footer -->
+                                <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                                    <div class="btn-group btn-group-sm">
+                                        <button type="button" class="btn btn-outline-secondary" onclick="toggleAllCols(true)" style="font-size:.72rem;">
+                                            <i class="bi bi-check2-all me-1"></i>Todas
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="toggleAllCols(false)" style="font-size:.72rem;">
+                                            <i class="bi bi-eye-slash me-1"></i>Nenhuma
+                                        </button>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="resetDefaultCols()"
+                                            style="font-size:.72rem;color:#005758;font-weight:500;">
+                                        <i class="bi bi-arrow-counterclockwise me-1"></i>Padrao
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <input type="text" id="searchInput" class="form-control form-control-sm" style="width:160px;"
+                               placeholder="Buscar..." oninput="debouncedFilter()">
                     </div>
                 </div>
                 <div class="card-body p-0">
@@ -837,21 +1264,21 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                         <table class="table table-hover table-fin mb-0" id="detailTable">
                             <thead style="position:sticky;top:0;z-index:1;">
                                 <tr>
-                                    <th style="width:160px;" data-i18n="table.resource">Resource Name</th>
-                                    <th style="width:100px;" data-i18n="table.date">Data</th>
-                                    <th style="width:270px;">Meter ID</th>
-                                    <th style="width:140px;">Subscription</th>
-                                    <th style="width:280px;">Subscription ID</th>
-                                    <th style="width:155px;" data-i18n="table.service">Servico / Meter</th>
-                                    <th style="width:130px;" data-i18n="table.resourceGroup">Resource Group</th>
-                                    <th style="width:90px;" data-i18n="table.region">Região</th>
-                                    <th style="width:85px;" data-i18n="table.quantity">Qtd</th>
-                                    <th style="width:95px;">Custo MOSP</th>
-                                    <th style="width:110px;">Preço Unit. FOB</th>
-                                    <th style="width:135px;">Total sem Impostos</th>
-                                    <th style="width:130px;">Total c/ Impostos</th>
-                                    <th style="width:130px;">Total c/ Markup</th>
-                                    <th style="width:215px;">Validação</th>
+                                    <th style="width:160px;" data-col-key="resource"     data-col-label="Resource Name"      data-col-group="Identificacao" data-col-icon="bi-box"               data-i18n="table.resource">Resource Name</th>
+                                    <th style="width:100px;" data-col-key="date"         data-col-label="Data"               data-col-group="Identificacao" data-col-icon="bi-calendar3"         data-i18n="table.date">Data</th>
+                                    <th style="width:270px;" data-col-key="meterid"      data-col-label="Meter ID"           data-col-group="Identificacao" data-col-icon="bi-upc">Meter ID</th>
+                                    <th style="width:140px;" data-col-key="subscription" data-col-label="Subscription"       data-col-group="Identificacao" data-col-icon="bi-building">Subscription</th>
+                                    <th style="width:280px;" data-col-key="subid"        data-col-label="Subscription ID"    data-col-group="Identificacao" data-col-icon="bi-fingerprint">Subscription ID</th>
+                                    <th style="width:155px;" data-col-key="service"      data-col-label="Servico / Meter"    data-col-group="Recurso"       data-col-icon="bi-cloud"             data-i18n="table.service">Servico / Meter</th>
+                                    <th style="width:130px;" data-col-key="rg"           data-col-label="Resource Group"     data-col-group="Recurso"       data-col-icon="bi-folder2"           data-i18n="table.resourceGroup">Resource Group</th>
+                                    <th style="width:90px;"  data-col-key="region"       data-col-label="Região"             data-col-group="Recurso"       data-col-icon="bi-geo-alt"           data-i18n="table.region">Região</th>
+                                    <th style="width:85px;"  data-col-key="qty"          data-col-label="Quantidade"         data-col-group="Consumo"       data-col-icon="bi-123"               data-i18n="table.quantity">Qtd</th>
+                                    <th style="width:95px;"  data-col-key="costmosp"     data-col-label="Custo MOSP"         data-col-group="Financeiro"    data-col-icon="bi-currency-dollar">Custo MOSP</th>
+                                    <th style="width:110px;" data-col-key="unitfob"      data-col-label="Preço Unit. FOB"    data-col-group="Financeiro"    data-col-icon="bi-tag">Preço Unit. FOB</th>
+                                    <th style="width:135px;" data-col-key="totalfob"     data-col-label="Total sem Impostos" data-col-group="Financeiro"    data-col-icon="bi-cash-stack">Total sem Impostos</th>
+                                    <th style="width:130px;" data-col-key="totaltax"     data-col-label="Total c/ Impostos"  data-col-group="Financeiro"    data-col-icon="bi-receipt">Total c/ Impostos</th>
+                                    <th style="width:130px;" data-col-key="totalmarkup"  data-col-label="Total c/ Markup"    data-col-group="Financeiro"    data-col-icon="bi-graph-up-arrow">Total c/ Markup</th>
+                                    <th style="width:215px;" data-col-key="validation"   data-col-label="Validação"          data-col-group="Validacao"     data-col-icon="bi-shield-check">Validação</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -862,9 +1289,15 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                             <?php
                                 // Normalise date to YYYY-MM-DD for data-date filter attribute
                                 $isoDate_ = $toIso_(trim($r['date'] ?? ''));
+                                $rowService_ = trim($r['meterCategory'] ?? $r['serviceFamily'] ?? '');
+                                $rowRg_ = trim($r['resourceGroup'] ?? '');
+                                $rowSub_ = trim($r['subscriptionName'] ?? '');
                             ?>
                             <tr data-search="<?= htmlspecialchars(strtolower($r['resourceName'].'|'.$r['meterCategory'].'|'.$r['meterName'].'|'.$r['resourceGroup'].'|'.$r['resourceLocation'].'|'.$r['subscriptionId'].'|'.$r['subscriptionName'].'|'.$r['meterId'])) ?>"
                                 data-date="<?= htmlspecialchars($isoDate_) ?>"
+                                data-service="<?= htmlspecialchars($rowService_) ?>"
+                                data-rg="<?= htmlspecialchars($rowRg_) ?>"
+                                data-subscription="<?= htmlspecialchars($rowSub_) ?>"
                                 data-mosp="<?= $r['costMosp'] !== null ? number_format((float)$r['costMosp'], 10, '.', '') : '' ?>"
                                 data-csp="<?= $r['costCsp'] !== null ? number_format((float)$r['costCsp'], 10, '.', '') : '' ?>">
                                 <td>
@@ -1064,9 +1497,12 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                             <i class="bi bi-file-earmark-arrow-down me-2" style="color:var(--td-teal);"></i>Exportar Analise Tecnica
                         </h6>
                         <div class="d-flex gap-2">
-                            <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTechCsv()">
-                                <i class="bi bi-file-earmark-spreadsheet me-1"></i>CSV
-                            </button>
+                            <form method="POST" class="d-inline">
+                                <input type="hidden" name="action" value="export_tech_excel">
+                                <button type="submit" class="btn btn-sm btn-outline-success">
+                                    <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                                </button>
+                            </form>
                             <button type="button" class="btn btn-sm btn-teal" onclick="exportTechPdf()" id="btnTechPdf">
                                 <i class="bi bi-file-earmark-pdf me-1"></i>PDF
                             </button>
@@ -1075,7 +1511,7 @@ function diffBg(float $v): string    { return $v < -0.001 ? 'var(--td-green-ligh
                 </div>
 
                 <!-- Resource Type Detail Table -->
-                <div class="fin-card">
+                <div class="fin-card fin-card-wide">
                     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                         <span><i class="bi bi-list-check me-2"></i>Detalhamento por Tipo de Recurso</span>
                         <div class="d-flex align-items-center gap-2">
@@ -1535,6 +1971,9 @@ function filterTable() {
     const q       = (document.getElementById('searchInput')?.value || '').toLowerCase();
     const dFrom   = document.getElementById('dateFrom')?.value  || '';
     const dTo     = document.getElementById('dateTo')?.value    || '';
+    const fService = document.getElementById('filterService')?.value || '';
+    const fRg      = document.getElementById('filterResourceGroup')?.value || '';
+    const fSub     = document.getElementById('filterSubscription')?.value || '';
     const rows    = _getRows();
     let visible   = 0;
 
@@ -1551,7 +1990,10 @@ function filterTable() {
         const matchText = !q || r.search.includes(q);
         const matchFrom = !dFrom || !r.date || r.date >= dFrom;
         const matchTo   = !dTo   || !r.date || r.date <= dTo;
-        const show      = matchText && matchFrom && matchTo;
+        const matchService = !fService || r.el.dataset.service === fService;
+        const matchRg      = !fRg || r.el.dataset.rg === fRg;
+        const matchSub     = !fSub || r.el.dataset.subscription === fSub;
+        const show         = matchText && matchFrom && matchTo && matchService && matchRg && matchSub;
 
         r.el.style.display = show ? '' : 'none';
 
@@ -1570,6 +2012,7 @@ function filterTable() {
     if (rc) rc.textContent = visible;
 
     updateDateHint(dFrom, dTo);
+    updateFilterContext(fService, fRg, fSub, visible, sumFob);
     _updateCards(sumFob, sumTax, sumMarkup, exchRate);
 }
 
@@ -1579,6 +2022,453 @@ function updateDateHint(dFrom, dTo) {
     if (!dFrom && !dTo) { hint.textContent = ''; return; }
     const fmt = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '…';
     hint.textContent = `Período: ${fmt(dFrom)} – ${fmt(dTo)}`;
+}
+
+// ============================================================
+// FUNÇÕES DE FILTRO AVANÇADO
+// ============================================================
+function updateFilterContext(service, rg, subscription, visibleCount, totalCsp) {
+    const ctx = document.getElementById('chatContextText');
+    const bar = document.getElementById('chatContextBar');
+    if (!ctx) return;
+    
+    const parts = [];
+    if (service) parts.push(`Serviço: ${service}`);
+    if (rg) parts.push(`RG: ${rg}`);
+    if (subscription) parts.push(`Assinatura: ${subscription}`);
+    
+    if (parts.length === 0) {
+        ctx.textContent = `Mostrando ${visibleCount} recursos | Total CSP: $${totalCsp.toLocaleString('pt-BR', {minimumFractionDigits:2})}`;
+        bar?.classList.remove('has-filter');
+    } else {
+        ctx.innerHTML = `<strong>${parts.join(' | ')}</strong> — ${visibleCount} recursos | $${totalCsp.toLocaleString('pt-BR', {minimumFractionDigits:2})}`;
+        bar?.classList.add('has-filter');
+    }
+    
+    // Armazenar contexto para o chat
+    window._chatFilterContext = { service, rg, subscription, visibleCount, totalCsp };
+}
+
+function clearAllFilters() {
+    document.getElementById('filterService').value = '';
+    document.getElementById('filterResourceGroup').value = '';
+    document.getElementById('filterSubscription').value = '';
+    document.getElementById('searchInput').value = '';
+    // Reset dates to original min/max
+    const dateFrom = document.getElementById('dateFrom');
+    const dateTo = document.getElementById('dateTo');
+    if (dateFrom) dateFrom.value = dateFrom.min;
+    if (dateTo) dateTo.value = dateTo.max;
+    filterTable();
+}
+
+// ===========================================================
+// Seletor de colunas (Detalhamento Linha a Linha)
+// ===========================================================
+const COL_STORAGE_KEY = 'finDetailHiddenCols_v1';
+
+function getHiddenCols() {
+    try { return new Set(JSON.parse(localStorage.getItem(COL_STORAGE_KEY) || '[]')); }
+    catch(e) { return new Set(); }
+}
+
+function saveHiddenCols(set) {
+    try { localStorage.setItem(COL_STORAGE_KEY, JSON.stringify([...set])); } catch(e) {}
+}
+
+function applyHiddenCols() {
+    const table = document.getElementById('detailTable');
+    if (!table) return;
+    const ths = table.querySelectorAll('thead th');
+    const hidden = getHiddenCols();
+    let css = '';
+    ths.forEach((th, idx) => {
+        const key = th.getAttribute('data-col-key');
+        if (hidden.has(key)) {
+            const nth = idx + 1;
+            css += `#detailTable tr > *:nth-child(${nth}){display:none !important;}`;
+        }
+    });
+    let styleEl = document.getElementById('detailColStyle');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'detailColStyle';
+        document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = css;
+    updateColChooserCount();
+}
+
+function updateColChooserCount() {
+    const table = document.getElementById('detailTable');
+    if (!table) return;
+    const ths = table.querySelectorAll('thead th');
+    const total = ths.length;
+    const hidden = getHiddenCols();
+    const visible = total - hidden.size;
+    const badge = document.getElementById('colChooserBadge');
+    if (badge) {
+        badge.textContent = visible + '/' + total;
+        badge.style.background = visible === total ? '#005758' : (visible === 0 ? '#dc2626' : '#0ea5e9');
+    }
+    const header = document.getElementById('colChooserCountHeader');
+    if (header) header.textContent = visible + ' / ' + total;
+}
+
+function buildColChooser() {
+    const table = document.getElementById('detailTable');
+    const list = document.getElementById('colChooserList');
+    if (!table || !list) return;
+    const ths = Array.from(table.querySelectorAll('thead th'));
+    const hidden = getHiddenCols();
+
+    // Agrupa por data-col-group
+    const groups = {};
+    ths.forEach((th, idx) => {
+        const group = th.getAttribute('data-col-group') || 'Outros';
+        if (!groups[group]) groups[group] = [];
+        groups[group].push({
+            idx,
+            key: th.getAttribute('data-col-key'),
+            label: th.getAttribute('data-col-label') || th.textContent.trim(),
+            icon: th.getAttribute('data-col-icon') || 'bi-square',
+        });
+    });
+
+    list.innerHTML = '';
+    Object.entries(groups).forEach(([groupName, cols], gIdx) => {
+        // Header do grupo
+        const groupHeader = document.createElement('div');
+        groupHeader.className = 'col-chooser-group-header';
+        groupHeader.style.cssText = 'padding:8px 14px 4px;font-size:.66rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;background:#fff;' + (gIdx > 0 ? 'border-top:1px solid #f1f5f9;margin-top:4px;' : '');
+        const visibleInGroup = cols.filter(c => !hidden.has(c.key)).length;
+        groupHeader.innerHTML = `<div class="d-flex justify-content-between align-items-center">
+            <span>${groupName}</span>
+            <span style="color:#94a3b8;font-weight:600;font-size:.62rem;">${visibleInGroup}/${cols.length}</span>
+        </div>`;
+        list.appendChild(groupHeader);
+
+        cols.forEach(c => {
+            const id = 'colChk_' + c.key;
+            const row = document.createElement('label');
+            row.className = 'col-chooser-row';
+            row.setAttribute('data-col-search', c.label.toLowerCase());
+            row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 14px;cursor:pointer;transition:background .12s;border-left:3px solid transparent;';
+            row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
+            row.onmouseleave = () => { row.style.background = ''; };
+            row.innerHTML =
+                `<input type="checkbox" class="form-check-input m-0" id="${id}" ${hidden.has(c.key)?'':'checked'} data-col-key="${c.key}" style="cursor:pointer;flex-shrink:0;">` +
+                `<i class="bi ${c.icon}" style="color:#005758;font-size:.95rem;width:18px;text-align:center;flex-shrink:0;"></i>` +
+                `<span style="font-size:.8rem;color:#1e293b;flex:1;">${c.label}</span>`;
+            list.appendChild(row);
+        });
+    });
+
+    list.querySelectorAll('input[type=checkbox]').forEach(chk => {
+        chk.addEventListener('change', (e) => {
+            e.stopPropagation();
+            const key = chk.getAttribute('data-col-key');
+            const set = getHiddenCols();
+            if (chk.checked) set.delete(key); else set.add(key);
+            saveHiddenCols(set);
+            applyHiddenCols();
+            // Atualiza so o contador dos headers de grupo sem rebuildar tudo
+            const headers = list.querySelectorAll('.col-chooser-group-header');
+            headers.forEach(h => {
+                const groupName = h.querySelector('span').textContent;
+                const groupCols = (groups[groupName] || []);
+                const visibleInGroup = groupCols.filter(c => !getHiddenCols().has(c.key)).length;
+                h.querySelectorAll('span')[1].textContent = visibleInGroup + '/' + groupCols.length;
+            });
+        });
+    });
+
+    // Click na linha inteira marca/desmarca
+    list.querySelectorAll('.col-chooser-row').forEach(row => {
+        row.addEventListener('click', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            const chk = row.querySelector('input[type=checkbox]');
+            chk.checked = !chk.checked;
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    });
+}
+
+function toggleAllCols(show) {
+    const table = document.getElementById('detailTable');
+    if (!table) return;
+    const ths = table.querySelectorAll('thead th');
+    const set = new Set();
+    if (!show) ths.forEach(th => set.add(th.getAttribute('data-col-key')));
+    saveHiddenCols(set);
+    applyHiddenCols();
+    buildColChooser();
+}
+
+function resetDefaultCols() {
+    saveHiddenCols(new Set());
+    applyHiddenCols();
+    buildColChooser();
+}
+
+// Busca/filtro do dropdown
+document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'colChooserSearch') {
+        const q = e.target.value.trim().toLowerCase();
+        document.querySelectorAll('#colChooserList .col-chooser-row').forEach(row => {
+            const txt = row.getAttribute('data-col-search') || '';
+            row.style.display = (q === '' || txt.includes(q)) ? '' : 'none';
+        });
+        // Esconde headers de grupo cuja todas as linhas estao ocultas
+        document.querySelectorAll('#colChooserList .col-chooser-group-header').forEach(h => {
+            let next = h.nextElementSibling;
+            let anyVisible = false;
+            while (next && !next.classList.contains('col-chooser-group-header')) {
+                if (next.style.display !== 'none') { anyVisible = true; break; }
+                next = next.nextElementSibling;
+            }
+            h.style.display = anyVisible || q === '' ? '' : 'none';
+        });
+    }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (document.getElementById('detailTable')) {
+        applyHiddenCols();
+        buildColChooser();
+    }
+});
+
+// Aplica filtro ao clicar nos breakdowns (Por Serviço, Por RG, Por Assinatura)
+function applyBreakdownFilter(type, value) {
+    // Limpa os outros filtros para focar no selecionado
+    document.getElementById('filterService').value = '';
+    document.getElementById('filterResourceGroup').value = '';
+    document.getElementById('filterSubscription').value = '';
+    document.getElementById('searchInput').value = '';
+    
+    // Aplica o filtro específico
+    switch(type) {
+        case 'service':
+            document.getElementById('filterService').value = value;
+            break;
+        case 'rg':
+            document.getElementById('filterResourceGroup').value = value;
+            break;
+        case 'subscription':
+            document.getElementById('filterSubscription').value = value;
+            break;
+    }
+    
+    // Executa o filtro
+    filterTable();
+}
+
+function clearDateFilter() {
+    const dateFrom = document.getElementById('dateFrom');
+    const dateTo = document.getElementById('dateTo');
+    if (dateFrom) dateFrom.value = dateFrom.min;
+    if (dateTo) dateTo.value = dateTo.max;
+    filterTable();
+}
+
+// ============================================================
+// CHAT DE ANÁLISE DE RECURSOS - Sidebar Esquerdo
+// ============================================================
+let _chatHistory = [];
+let _chatBusy = false;
+
+function toggleResourceChat() {
+    const panel = document.getElementById('resourceChatPanel');
+    const overlay = document.getElementById('chatOverlay');
+    const fab = document.getElementById('chatFab');
+    if (!panel) return;
+    
+    const isOpen = panel.classList.contains('chat-open');
+    
+    if (isOpen) {
+        panel.classList.remove('chat-open');
+        overlay.classList.remove('active');
+        fab.classList.remove('hidden');
+    } else {
+        panel.classList.add('chat-open');
+        overlay.classList.add('active');
+        fab.classList.add('hidden');
+        document.getElementById('chatInput')?.focus();
+    }
+}
+
+function askSuggestion(question) {
+    document.getElementById('chatInput').value = question;
+    sendChatMessage();
+}
+
+async function sendChatMessage() {
+    if (_chatBusy) return;
+    
+    const input = document.getElementById('chatInput');
+    const message = input?.value?.trim();
+    if (!message) return;
+    
+    const messagesDiv = document.getElementById('chatMessages');
+    const sendBtn = document.getElementById('chatSendBtn');
+    
+    // Adicionar mensagem do usuário
+    messagesDiv.innerHTML += `
+        <div class="chat-message user">
+            <div class="chat-avatar"><i class="bi bi-person"></i></div>
+            <div class="chat-bubble">${escapeHtml(message)}</div>
+        </div>
+    `;
+    
+    // Limpar input
+    input.value = '';
+    
+    // Adicionar indicador de digitação
+    const typingId = 'typing_' + Date.now();
+    messagesDiv.innerHTML += `
+        <div class="chat-message bot" id="${typingId}">
+            <div class="chat-avatar"><i class="bi bi-robot"></i></div>
+            <div class="chat-bubble">
+                <div class="chat-typing">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        </div>
+    `;
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    
+    _chatBusy = true;
+    sendBtn.disabled = true;
+    
+    try {
+        // Coletar contexto dos filtros
+        const resourceContext = {
+            selectedService: document.getElementById('filterService')?.value || '',
+            selectedResourceGroup: document.getElementById('filterResourceGroup')?.value || '',
+            selectedSubscription: document.getElementById('filterSubscription')?.value || '',
+            visibleRows: window._chatFilterContext?.visibleCount || 0,
+            totalFiltered: window._chatFilterContext?.totalCsp || 0
+        };
+        
+        const response = await fetch('resource-analysis-chat-api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                history: _chatHistory,
+                resourceContext: resourceContext
+            })
+        });
+        
+        const data = await response.json();
+        const reply = data.reply || 'Desculpe, não consegui processar sua solicitação.';
+        
+        // Salvar no histórico
+        _chatHistory.push({ role: 'user', content: message });
+        _chatHistory.push({ role: 'assistant', content: reply });
+        
+        // Limitar histórico a 10 mensagens
+        if (_chatHistory.length > 20) {
+            _chatHistory = _chatHistory.slice(-20);
+        }
+        
+        // Remover indicador de digitação e adicionar resposta
+        document.getElementById(typingId)?.remove();
+        messagesDiv.innerHTML += `
+            <div class="chat-message bot">
+                <div class="chat-avatar"><i class="bi bi-robot"></i></div>
+                <div class="chat-bubble">${formatChatReply(reply)}</div>
+            </div>
+        `;
+        
+    } catch (err) {
+        console.error('Chat error:', err);
+        document.getElementById(typingId)?.remove();
+        messagesDiv.innerHTML += `
+            <div class="chat-message bot">
+                <div class="chat-avatar"><i class="bi bi-robot"></i></div>
+                <div class="chat-bubble" style="color:#dc2626;">
+                    <i class="bi bi-exclamation-triangle me-1"></i>Erro ao conectar com o assistente. Tente novamente.
+                </div>
+            </div>
+        `;
+    } finally {
+        _chatBusy = false;
+        sendBtn.disabled = false;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatChatReply(text) {
+    // Converter markdown básico para HTML
+    let html = escapeHtml(text);
+    
+    // Headers
+    html = html.replace(/^### (.+)$/gm, '<h4 style="margin:10px 0 6px;font-size:.92rem;color:#005758;">$1</h4>');
+    html = html.replace(/^## (.+)$/gm, '<h3 style="margin:12px 0 8px;font-size:.95rem;color:#005758;">$1</h3>');
+    
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    
+    // Italic
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    
+    // Code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    // Lists
+    html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
+    
+    // Line breaks
+    html = html.replace(/\n\n/g, '</p><p style="margin:8px 0;">');
+    html = html.replace(/\n/g, '<br>');
+    
+    // Tables (responsivo com wrapper)
+    if (html.includes('|')) {
+        const lines = html.split('<br>');
+        let inTable = false;
+        let tableHtml = '';
+        const newLines = [];
+        let isFirstRow = true;
+        
+        for (const line of lines) {
+            if (line.includes('|') && !line.match(/^\|[-:]+\|/)) {
+                if (!inTable) {
+                    tableHtml = '<div class="table-wrapper"><table>';
+                    inTable = true;
+                    isFirstRow = true;
+                }
+                const cells = line.split('|').filter(c => c.trim());
+                const tag = isFirstRow ? 'th' : 'td';
+                tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+                if (isFirstRow) isFirstRow = false;
+            } else if (line.match(/^\|[-:]+\|/)) {
+                // Skip separator line
+            } else {
+                if (inTable) {
+                    tableHtml += '</table></div>';
+                    newLines.push(tableHtml);
+                    tableHtml = '';
+                    inTable = false;
+                }
+                newLines.push(line);
+            }
+        }
+        if (inTable) {
+            tableHtml += '</table></div>';
+            newLines.push(tableHtml);
+        }
+        html = newLines.join('<br>');
+    }
+    
+    return html;
 }
 
 function fmtUsdJs(v) {
@@ -1591,6 +2481,14 @@ function recalcTable() {
     const tFactor = 1 + (tax    / 100);
     const mFactor = 1 + (markup / 100);
     const exchRate = <?= $results ? (float)($results['summary']['exchangeRate'] ?? 5.39) : 5.39 ?>;
+    
+    // Atualiza campos ocultos para exportação Excel
+    const taxPctExcel = document.getElementById('taxPctExcel');
+    const markupPctExcel = document.getElementById('markupPctExcel');
+    const exchRateExcel = document.getElementById('exchRateExcel');
+    if (taxPctExcel) taxPctExcel.value = tax;
+    if (markupPctExcel) markupPctExcel.value = markup;
+    if (exchRateExcel) exchRateExcel.value = exchRate;
 
     const rows = _getRows();
     let sumFob = 0, sumTax = 0, sumMarkup = 0;
@@ -1834,13 +2732,15 @@ function _doGerarPDF() {
     const trunc = (s, n) => s && s.length > n ? s.substring(0, n - 1) + '...' : (s || '—');
 
     // ============================================================
-    // PAGE 1 — CAPA (sql-advisor design)
+    // PAGE 1 — CAPA (redesenho 2025)
     // ============================================================
     const TEAL_L   = [0, 128, 130];
+    const TEAL_XL  = [212, 235, 235];   // tonalidade clara teal
     const GRAY_L   = [160, 165, 170];
     const BG       = [245, 247, 250];
     const BORDER   = [226, 232, 240];
     const CHARCOAL = [38, 38, 38];
+    const ACCENT   = [199, 244, 100];   // verde lima TD Synnex p/ destaques
     const todayFull = new Date().toLocaleDateString('pt-BR', {day:'numeric', month:'long', year:'numeric'});
     const dFrom = document.getElementById('dateFrom')?.value;
     const dTo   = document.getElementById('dateTo')?.value;
@@ -1848,73 +2748,114 @@ function _doGerarPDF() {
 
     // White background
     doc.setFillColor(...WHITE); doc.rect(0, 0, W, H, 'F');
-    // Thin teal bar
-    doc.setFillColor(...TEAL); doc.rect(0, 0, W, 4, 'F');
-    // Logo
+
+    // Hero band (teal escuro 50mm de altura)
+    doc.setFillColor(...TEAL_DARK); doc.rect(0, 0, W, 60, 'F');
+    // Sutil gradient overlay (faixa horizontal mais clara no meio)
+    doc.setFillColor(...TEAL); doc.rect(0, 45, W, 15, 'F');
+    // Linha lima de acento
+    doc.setFillColor(...ACCENT); doc.rect(0, 60, W, 1.2, 'F');
+
+    // Logo na hero
     const _logo = window._finLogoDataUrl || null;
     if (_logo) {
-        try { doc.addImage(_logo, 'PNG', ML, 18, 50, 10.2); } catch(e) {}
+        try { doc.addImage(_logo, 'PNG', ML, 16, 50, 10.2); } catch(e) {}
     } else {
-        doc.setFontSize(16); doc.setTextColor(...TEAL_DARK);
-        doc.setFont('helvetica', 'bold'); doc.text('TD SYNNEX', ML, 26);
+        doc.setFontSize(16); doc.setTextColor(...WHITE);
+        doc.setFont('helvetica', 'bold'); doc.text('TD SYNNEX', ML, 24);
     }
-    // Teal side accent
-    doc.setFillColor(...TEAL); doc.rect(0, 80, 6, 95, 'F');
+    // Tag na direita
+    doc.setFontSize(8); doc.setTextColor(...ACCENT);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PROPOSTA COMERCIAL', W - MR, 22, {align:'right'});
+    doc.setFontSize(7); doc.setTextColor(255, 255, 255, 0.7);
+    doc.setFont('helvetica', 'normal');
+    doc.text(todayFull, W - MR, 28, {align:'right'});
 
-    // Title
+    // Titulo principal abaixo do hero
     doc.setFontSize(11); doc.setTextColor(...TEAL_L);
     doc.setFont('helvetica', 'bold');
-    doc.text('PROPOSTA COMERCIAL', ML + 8, 100);
+    doc.text('ANALISE FINANCEIRA DE MIGRACAO', ML, 78);
 
-    doc.setFontSize(30); doc.setTextColor(...CHARCOAL);
+    doc.setFontSize(34); doc.setTextColor(...CHARCOAL);
     doc.setFont('helvetica', 'bold');
-    doc.text('Analise Financeira', ML + 8, 118);
-    doc.setFontSize(22);
-    doc.text(decodeHtml(pdfData.migrationLabel) || 'MOSP para Azure CSP', ML + 8, 131);
-
-    doc.setFontSize(12); doc.setTextColor(...GRAY);
+    doc.text('Azure CSP', ML, 96);
+    doc.setFontSize(16); doc.setTextColor(...DARK);
     doc.setFont('helvetica', 'normal');
-    doc.text('Comparativo de Custos via TD SYNNEX', ML + 8, 141);
-    // Schema info
-    const schemaLabel = (pdfData.schemaAgreement || 'MOSA') + ' ' + (pdfData.schemaVersion || '2019-11-01');
-    doc.setFontSize(8); doc.setTextColor(...GRAY);
-    doc.text('Dataset Schema: ' + schemaLabel, ML + 8, 149);
+    doc.text(decodeHtml(pdfData.migrationLabel) || 'MOSP para Azure CSP', ML, 108);
 
-    // Client box
-    const clientBoxY = 162;
-    doc.setFillColor(...BG);
-    doc.roundedRect(ML + 8, clientBoxY, CW - 8, 28, 3, 3, 'F');
-    doc.setFillColor(...TEAL); doc.rect(ML + 8, clientBoxY, 3, 28, 'F');
-    doc.setFontSize(8); doc.setTextColor(...TEAL_L);
+    // KPI strip horizontal - 2 destaques principais (MOSP atual vs CSP proposto)
+    const kpiY = 122;
+    const kpiH = 38;
+    // Card branco com sombra sutil (linha de baixo)
+    doc.setFillColor(...WHITE);
+    doc.roundedRect(ML, kpiY, CW, kpiH, 5, 5, 'F');
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3);
+    doc.roundedRect(ML, kpiY, CW, kpiH, 5, 5, 'S');
+    // Faixa lateral teal de acento na esquerda
+    doc.setFillColor(...TEAL);
+    doc.roundedRect(ML, kpiY, 4, kpiH, 5, 5, 'F');
+    doc.rect(ML + 4, kpiY, 1, kpiH, 'F');
+
+    const kpis = [
+        { label: 'CUSTO ATUAL (MOSP)',     val: fmtU(sumMosp), sub: fmtB(sumMosp), color: GRAY,  pillBg: BG,     pillFg: GRAY },
+        { label: 'CUSTO PROPOSTO (CSP FOB)', val: fmtU(sumFob),  sub: fmtB(sumFob),  color: TEAL,  pillBg: TEAL_XL, pillFg: TEAL_DARK },
+    ];
+    const kpiW = (CW - 5) / 2;
+    kpis.forEach((k, i) => {
+        const x = ML + 5 + i * kpiW;
+        if (i > 0) {
+            doc.setDrawColor(...BORDER); doc.setLineWidth(0.3);
+            doc.line(x, kpiY + 7, x, kpiY + kpiH - 7);
+        }
+        // Pill com label
+        doc.setFillColor(...k.pillBg);
+        doc.roundedRect(x + 8, kpiY + 6, 56, 5.5, 2.5, 2.5, 'F');
+        doc.setFontSize(6.8); doc.setTextColor(...k.pillFg);
+        doc.setFont('helvetica', 'bold');
+        doc.text(k.label, x + 36, kpiY + 9.8, {align:'center'});
+        // Valor principal
+        doc.setFontSize(17); doc.setTextColor(...k.color);
+        doc.setFont('helvetica', 'bold');
+        doc.text(k.val, x + 8, kpiY + 23);
+        // Subtitulo (BRL)
+        doc.setFontSize(8.2); doc.setTextColor(...GRAY);
+        doc.setFont('helvetica', 'normal');
+        doc.text(k.sub, x + 8, kpiY + 31);
+    });
+
+    // Card de cliente
+    const clientBoxY = kpiY + kpiH + 12;
+    doc.setFillColor(...TEAL_XL);
+    doc.roundedRect(ML, clientBoxY, CW, 32, 4, 4, 'F');
+    doc.setFillColor(...TEAL); doc.rect(ML, clientBoxY, 4, 32, 'F');
+    doc.setFontSize(8); doc.setTextColor(...TEAL_DARK);
     doc.setFont('helvetica', 'bold');
-    doc.text('PREPARADO PARA', ML + 18, clientBoxY + 9);
-    doc.setFontSize(17); doc.setTextColor(...CHARCOAL);
+    doc.text('PREPARADO PARA', ML + 10, clientBoxY + 10);
+    doc.setFontSize(18); doc.setTextColor(...CHARCOAL);
     doc.setFont('helvetica', 'bold');
     const clientLabel = (pdfData.clientName || 'Cliente').substring(0, 42);
-    doc.text(clientLabel, ML + 18, clientBoxY + 21);
+    doc.text(clientLabel, ML + 10, clientBoxY + 22);
 
-    // Bottom metadata bar
-    const metaY = H - 52;
+    // Period info no rodape do card
+    const periodStr = (dFrom || dTo) ? fmtDate(dFrom) + ' a ' + fmtDate(dTo) : 'Todo o periodo disponivel';
+    doc.setFontSize(7.5); doc.setTextColor(...TEAL_DARK);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Periodo analisado: ' + periodStr, ML + 10, clientBoxY + 28);
+
+    // Schema chip discreto
+    const schemaLabel = (pdfData.schemaAgreement || 'MOSA') + ' ' + (pdfData.schemaVersion || '2019-11-01');
+    doc.setFontSize(7); doc.setTextColor(...GRAY);
+    doc.text('Dataset Schema: ' + schemaLabel + '   •   ' + pdfData.summary.totalRows + ' registros analisados', ML, clientBoxY + 42);
+
+    // Footer da capa
     doc.setDrawColor(...BORDER); doc.setLineWidth(0.3);
-    doc.line(ML, metaY, W - MR, metaY);
-    const metaCols = [
-        {label: 'DATA DA ANALISE', value: todayFull},
-        {label: 'PERIODO',         value: (dFrom || dTo) ? fmtDate(dFrom) + ' a ' + fmtDate(dTo) : 'Todo o periodo'},
-    ];
-    const colW_ = CW / metaCols.length;
-    metaCols.forEach((col, i) => {
-        const cx = ML + i * colW_;
-        doc.setFontSize(7); doc.setTextColor(...TEAL_L);
-        doc.setFont('helvetica', 'bold'); doc.text(col.label, cx, metaY + 9);
-        doc.setFontSize(9); doc.setTextColor(...CHARCOAL);
-        doc.setFont('helvetica', 'normal');
-        const val = col.value.length > 28 ? col.value.substring(0, 27) + '…' : col.value;
-        doc.text(val, cx, metaY + 17);
-    });
-    // Confidential note
+    doc.line(ML, H - 22, W - MR, H - 22);
     doc.setFontSize(7); doc.setTextColor(...GRAY_L);
     doc.setFont('helvetica', 'italic');
-    doc.text('Documento Confidencial — TD SYNNEX Brasil — Valores sujeitos a alteracao', ML, H - 16);
+    doc.text('Documento Confidencial - TD SYNNEX Brasil - Valores sujeitos a alteracao', ML, H - 14);
+    doc.setFont('helvetica', 'bold'); doc.setTextColor(...TEAL);
+    doc.text('www.tdsynnex.com.br', W - MR, H - 14, {align:'right'});
 
     let y = 125; // reset y (used by pages 2+)
 
@@ -1924,79 +2865,86 @@ function _doGerarPDF() {
     doc.addPage();
     _pdfHeader(doc, 'Sumario Executivo', W, TEAL, BLUE, WHITE, DARK, GRAY, ML);
 
-    y = 44;
+    y = 50;
 
-    // Row 1: 3 metric cards
-    const cardW3 = (CW - 8) / 3;
-    [
-        { label: 'Total MOSP (Atual)',  val: fmtU(sumMosp),   sub: fmtB(sumMosp),   color: GRAY },
-        { label: 'Total CSP FOB',       val: fmtU(sumFob),    sub: fmtB(sumFob),    color: TEAL },
-        { label: 'Taxa de Cambio',      val: 'R$ ' + fmtN(exch, 2), sub: 'USD > BRL', color: BLUE },
-    ].forEach((m, i) => {
-        const x = ML + i * (cardW3 + 4);
-        doc.setFillColor(...LIGHT);
-        doc.roundedRect(x, y, cardW3, 26, 3, 3, 'F');
+    // Section heading com regua teal
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(...CHARCOAL);
+    doc.text('Visao Geral dos Custos', ML, y);
+    doc.setDrawColor(...TEAL); doc.setLineWidth(1);
+    doc.line(ML, y + 3, ML + 38, y + 3);
+    doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Composicao das métricas financeiras com impostos e markup aplicaveis.', ML, y + 10);
+    y += 18;
+
+    // Grid 2x2 de metricas (MOSP, CSP FOB, com Impostos, com Markup)
+    const gridCardW = (CW - 6) / 2;
+    const gridCardH = 28;
+    const gridMetrics = [
+        { label: 'TOTAL MOSP (ATUAL)',     val: fmtU(sumMosp),  sub: fmtB(sumMosp),  color: GRAY },
+        { label: 'TOTAL CSP FOB',          val: fmtU(sumFob),   sub: fmtB(sumFob),   color: TEAL },
+        { label: tax > 0 ? 'COM IMPOSTOS (' + fmtN(tax,2) + '%)' : 'COM IMPOSTOS',  val: fmtU(sumTax),    sub: fmtB(sumTax),    color: BLUE },
+        { label: markup > 0 ? 'COM MARKUP (' + fmtN(markup,1) + '%)' : 'COM MARKUP', val: fmtU(sumMarkup), sub: fmtB(sumMarkup), color: [0,150,136] },
+    ];
+    gridMetrics.forEach((m, i) => {
+        const col = i % 2, row = Math.floor(i / 2);
+        const x = ML + col * (gridCardW + 6);
+        const yy = y + row * (gridCardH + 6);
+        doc.setFillColor(255, 255, 255);
+        doc.setDrawColor(...BORDER); doc.setLineWidth(0.5);
+        doc.roundedRect(x, yy, gridCardW, gridCardH, 4, 4, 'FD');
+        // Barra lateral colorida
         doc.setFillColor(...m.color);
-        doc.rect(x, y, cardW3, 2, 'F');
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...GRAY);
-        doc.text(m.label.toUpperCase(), x + 3, y + 9);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(...DARK);
-        doc.text(m.val, x + 3, y + 18);
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...GRAY);
-        doc.text(m.sub, x + 3, y + 23);
+        doc.roundedRect(x, yy, 3.5, gridCardH, 4, 4, 'F');
+        doc.rect(x + 3.5, yy, 1, gridCardH, 'F');
+        // Texto
+        doc.setFontSize(7); doc.setTextColor(...GRAY);
+        doc.setFont('helvetica', 'bold');
+        doc.text(m.label, x + 8, yy + 8);
+        doc.setFontSize(15); doc.setTextColor(...DARK);
+        doc.setFont('helvetica', 'bold');
+        doc.text(m.val, x + 8, yy + 17);
+        doc.setFontSize(8); doc.setTextColor(...GRAY);
+        doc.setFont('helvetica', 'normal');
+        doc.text(m.sub, x + 8, yy + 23);
     });
-    y += 32;
+    y += gridCardH * 2 + 6 + 14;
 
-    // Row 2: 3 more cards
-    [
-        { label: tax > 0 ? 'Total c/ Impostos (' + fmtN(tax,2) + '%)' : 'Total c/ Impostos', val: fmtU(sumTax), sub: fmtB(sumTax), color: BLUE },
-        { label: markup > 0 ? 'Total c/ Markup (' + fmtN(markup,1) + '%)' : 'Total c/ Markup',     val: fmtU(sumMarkup), sub: fmtB(sumMarkup), color: [0,150,136] },
-        { label: isEco ? 'Economia (MOSP vs CSP)' : 'Variacao (MOSP vs CSP)', val: (isEco ? '-' : '+') + fmtU(Math.abs(saving)), sub: (isEco ? '-' : '+') + fmtN(pctAbs,1) + '%', color: isEco ? ECO_GREEN : ECO_RED },
-    ].forEach((m, i) => {
-        const x = ML + i * (cardW3 + 4);
-        doc.setFillColor(...LIGHT);
-        doc.roundedRect(x, y, cardW3, 26, 3, 3, 'F');
-        doc.setFillColor(...m.color);
-        doc.rect(x, y, cardW3, 2, 'F');
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...GRAY);
-        doc.text(m.label.toUpperCase(), x + 3, y + 9);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(...DARK);
-        doc.text(m.val, x + 3, y + 18);
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...GRAY);
-        doc.text(m.sub, x + 3, y + 23);
-    });
-    y += 34;
-
-    // Parameters table
+    // Parametros da analise (em duas colunas, mais compacto)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...DARK);
-    doc.text('Parametros da Analise', ML, y); y += 5;
+    doc.text('Parametros da Analise', ML, y); y += 4;
+    doc.setDrawColor(...TEAL); doc.setLineWidth(0.8);
+    doc.line(ML, y, ML + 28, y); y += 5;
 
     const params = [
-        ['Total de registros no CSV',          pdfData.summary.totalRows + ' registros'],
-        ['Linhas exibidas (filtro ativo)',      visibleRows.length + ' registros'],
-        ['MeterIDs unicos consultados na API',  pdfData.summary.uniqueMeterIds + ' IDs'],
-        ['MeterIDs encontrados na API',         (pdfData.summary.uniqueMeterIds - pdfData.summary.notFoundCount) + ' de ' + pdfData.summary.uniqueMeterIds],
-        ['Impostos aplicados',                  tax > 0 ? fmtN(tax, 2) + '%' : 'Nao aplicado'],
-        ['Markup aplicado',                     markup > 0 ? fmtN(markup, 1) + '%' : 'Nao aplicado'],
-        ['Periodo analisado',                   dFrom ? fmtDate(dFrom) + ' a ' + fmtDate(dTo) : 'Todo o periodo'],
-        ['Arquivo CSV',                         pdfData.filename || '—'],
+        ['Registros no CSV',           pdfData.summary.totalRows + ''],
+        ['Linhas exibidas',             visibleRows.length + ''],
+        ['MeterIDs unicos',             pdfData.summary.uniqueMeterIds + ''],
+        ['MeterIDs encontrados',        (pdfData.summary.uniqueMeterIds - pdfData.summary.notFoundCount) + '/' + pdfData.summary.uniqueMeterIds],
+        ['Impostos',                    tax > 0 ? fmtN(tax, 2) + '%' : 'Nao aplicado'],
+        ['Markup',                      markup > 0 ? fmtN(markup, 1) + '%' : 'Nao aplicado'],
+        ['Periodo',                     dFrom ? fmtDate(dFrom) + ' a ' + fmtDate(dTo) : 'Todo o periodo'],
+        ['Cambio USD>BRL',              'R$ ' + fmtN(exch, 4)],
     ];
+    const halfCW = CW / 2;
     params.forEach(([label, val], i) => {
-        const ry = y + i * 8.5;
-        if (i % 2 === 0) { doc.setFillColor(...LIGHT); doc.rect(ML, ry - 3.5, CW, 8.5, 'F'); }
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY);
-        doc.text(label, ML + 3, ry + 1);
+        const col = i % 2, row = Math.floor(i / 2);
+        const x = ML + col * halfCW;
+        const ry = y + row * 7;
+        if (row % 2 === 0) { doc.setFillColor(...LIGHT); doc.rect(x, ry - 3, halfCW, 7, 'F'); }
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRAY);
+        doc.text(label, x + 3, ry + 1);
         doc.setFont('helvetica', 'bold'); doc.setTextColor(...DARK);
-        doc.text(val, W - MR, ry + 1, {align: 'right'});
+        doc.text(val, x + halfCW - 3, ry + 1, {align: 'right'});
     });
-    y += params.length * 8.5 + 8;
+    y += Math.ceil(params.length / 2) * 7 + 8;
 
     // Top Services
     const svcEntries = Object.entries(pdfData.summary.byService);
     if (svcEntries.length > 0) {
         doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...DARK);
         doc.text('Principais Servicos Azure', ML, y); y += 3;
-        const svcRows = svcEntries.slice(0, 7).map(([name, d]) => [
+        const svcRows = svcEntries.slice(0, 6).map(([name, d]) => [
             trunc(name, 38),
             fmtU(d.costCsp),
             d.count + ' linhas',
@@ -2005,7 +2953,7 @@ function _doGerarPDF() {
             startY: y,
             head: [['Servico', 'Custo CSP FOB', 'Linhas']],
             body: svcRows,
-            styles: { fontSize: 8, cellPadding: 2 },
+            styles: { fontSize: 8, cellPadding: 2.2 },
             headStyles: { fillColor: TEAL, textColor: WHITE, fontStyle: 'bold', fontSize: 8 },
             alternateRowStyles: { fillColor: LIGHT },
             margin: { left: ML, right: MR },
@@ -2020,7 +2968,7 @@ function _doGerarPDF() {
     if (rgEntries.length > 0 && y < H - 60) {
         doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...DARK);
         doc.text('Principais Resource Groups', ML, y); y += 3;
-        const rgRows = rgEntries.slice(0, 6).map(([name, d]) => [
+        const rgRows = rgEntries.slice(0, 5).map(([name, d]) => [
             trunc(name, 38),
             fmtU(d.costMosp),
             fmtU(d.costCsp),
@@ -2030,7 +2978,7 @@ function _doGerarPDF() {
             startY: y,
             head: [['Resource Group', 'Custo MOSP', 'Custo CSP FOB', 'Linhas']],
             body: rgRows,
-            styles: { fontSize: 8, cellPadding: 2 },
+            styles: { fontSize: 8, cellPadding: 2.2 },
             headStyles: { fillColor: TEAL, textColor: WHITE, fontStyle: 'bold', fontSize: 8 },
             alternateRowStyles: { fillColor: LIGHT },
             margin: { left: ML, right: MR },
@@ -2325,7 +3273,11 @@ const translations = {
     }
 };
 
-let currentLanguage = localStorage.getItem('appLanguage') || 'pt-BR';
+// Sincroniza com o idioma definido no servidor (seletor da topbar / cookie).
+// Mapeia os códigos do PHP (pt-BR/en/es) para os códigos do objeto JS (pt-BR/en-US/es-ES).
+const phpLangMap = { 'pt-BR': 'pt-BR', 'en': 'en-US', 'es': 'es-ES' };
+let currentLanguage = phpLangMap['<?= getLang() ?>'] || 'pt-BR';
+localStorage.setItem('appLanguage', currentLanguage);
 
 function applyTranslations(lang) {
     const trans = translations[lang] || translations['pt-BR'];
@@ -2366,16 +3318,664 @@ document.addEventListener('DOMContentLoaded', () => {
     // Aplicar idioma salvo
     setLanguage(currentLanguage);
     
-    // Click nos itens do dropdown
+    // Click nos itens do dropdown — redireciona para o seletor canônico (cookie/servidor)
+    const jsToPhpLang = { 'pt-BR': 'pt-BR', 'en-US': 'en', 'es-ES': 'es' };
     document.querySelectorAll('[data-lang]').forEach(item => {
         item.addEventListener('click', (e) => {
             e.preventDefault();
             const lang = e.target.closest('[data-lang]').getAttribute('data-lang');
-            setLanguage(lang);
+            const phpLang = jsToPhpLang[lang] || 'pt-BR';
+            window.location.href = 'set-language.php?lang=' + phpLang + '&redirect=analise-financeira.php';
         });
     });
 });
 </script>
+
+<!-- ============================================================ -->
+<!-- CHAT DE ANÁLISE DE RECURSOS AZURE - Sidebar Esquerdo -->
+<!-- ============================================================ -->
+<div class="chat-overlay" id="chatOverlay" onclick="toggleResourceChat()"></div>
+
+<button id="chatFab" onclick="toggleResourceChat()" title="Assistente de Análise Azure" aria-label="Abrir assistente">
+    <i class="bi bi-stars"></i>
+    <span class="chat-fab-label">Assistente Azure</span>
+</button>
+
+<aside id="resourceChatPanel" class="resource-chat-panel" role="complementary" aria-label="Assistente Azure">
+    <header class="chat-header">
+        <div class="chat-header-icon"><i class="bi bi-stars"></i></div>
+        <div class="chat-header-title">
+            <span class="chat-header-name">Assistente Azure</span>
+            <span class="chat-header-sub">Consultor de custos &amp; migração</span>
+        </div>
+        <button class="btn-close-chat" onclick="toggleResourceChat()" title="Fechar" aria-label="Fechar">
+            <i class="bi bi-x-lg"></i>
+        </button>
+    </header>
+    <div class="chat-messages" id="chatMessages">
+        <div class="chat-message bot">
+            <div class="chat-avatar"><i class="bi bi-stars"></i></div>
+            <div class="chat-bubble">
+                <div class="chat-welcome-title">Olá! Sou seu consultor de análise Azure.</div>
+                <div class="chat-welcome-sub">Posso ajudar você a:</div>
+                <ul class="chat-welcome-list">
+                    <li><i class="bi bi-graph-up"></i>Analisar custos por serviço, RG ou assinatura</li>
+                    <li><i class="bi bi-currency-exchange"></i>Comparar preços MOSP × CSP</li>
+                    <li><i class="bi bi-piggy-bank"></i>Identificar oportunidades de economia</li>
+                    <li><i class="bi bi-arrow-left-right"></i>Avaliar viabilidade de migração</li>
+                </ul>
+                <?php if (!$results): ?>
+                <div class="chat-status chat-status-warn"><i class="bi bi-exclamation-triangle"></i>Faça upload de um arquivo CSV para que eu possa analisar seus recursos.</div>
+                <?php else: ?>
+                <div class="chat-status chat-status-ok"><i class="bi bi-check-circle"></i>Dados carregados — pergunte-me sobre os <strong><?= number_format($results['summary']['totalRows']) ?></strong> recursos analisados.</div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <div class="chat-input-area">
+        <div class="chat-context-bar" id="chatContextBar">
+            <i class="bi bi-funnel"></i><span id="chatContextText">Nenhum filtro aplicado</span>
+        </div>
+        <div class="chat-input-row">
+            <input type="text" id="chatInput" placeholder="Pergunte sobre custos, recursos, migração…"
+                   onkeypress="if(event.key==='Enter')sendChatMessage()" autocomplete="off">
+            <button class="chat-send-btn" onclick="sendChatMessage()" id="chatSendBtn" title="Enviar" aria-label="Enviar">
+                <i class="bi bi-send-fill"></i>
+            </button>
+        </div>
+        <div class="chat-suggestions">
+            <button onclick="askSuggestion('Quais são os serviços com maior custo?')"><i class="bi bi-graph-up"></i>Maiores custos</button>
+            <button onclick="askSuggestion('Qual a economia ao migrar para CSP?')"><i class="bi bi-piggy-bank"></i>Economia CSP</button>
+            <button onclick="askSuggestion('Quais recursos têm restrição de migração?')"><i class="bi bi-exclamation-triangle"></i>Restrições</button>
+            <button onclick="askSuggestion('Resuma os custos por Resource Group')"><i class="bi bi-folder"></i>Por RG</button>
+        </div>
+    </div>
+</aside>
+
+<style>
+/* ===========================================================
+   Chat Panel - Sidebar ESQUERDO (alinhado ao design TD SYNNEX)
+   Tokens: --td-teal #005758 | --td-green #82C341 | --td-dark #1e293b
+   =========================================================== */
+.resource-chat-panel {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 460px;
+    max-width: 92vw;
+    height: 100vh;
+    background: #fff;
+    flex-direction: column;
+    z-index: 9999;
+    overflow: hidden;
+    border-right: 1px solid #e2e8f0;
+    box-shadow: 4px 0 32px rgba(15,23,42,0.10);
+    animation: slideInLeft 0.3s cubic-bezier(0.34,1.15,0.64,1);
+    font-family: 'Inter','Segoe UI',sans-serif;
+}
+.resource-chat-panel.chat-open {
+    display: flex;
+}
+@keyframes slideInLeft {
+    from { transform: translateX(-100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+/* Overlay escuro quando chat está aberto */
+.chat-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 9998;
+    animation: fadeIn 0.2s ease;
+}
+.chat-overlay.active {
+    display: block;
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.chat-header {
+    background: #fff;
+    color: var(--td-dark);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #e2e8f0;
+    position: relative;
+}
+.chat-header::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--td-teal), var(--td-green));
+}
+.chat-header-icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--td-teal), #007a7c);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.05rem;
+    box-shadow: 0 2px 8px rgba(0,87,88,0.25);
+    flex-shrink: 0;
+}
+.chat-header-title {
+    display: flex; flex-direction: column;
+    flex: 1; min-width: 0;
+}
+.chat-header-name {
+    font-weight: 700; font-size: .95rem; color: var(--td-dark);
+    line-height: 1.2;
+}
+.chat-header-sub {
+    font-size: .72rem; color: var(--td-gray);
+    text-transform: uppercase; letter-spacing: .04em;
+    margin-top: 2px;
+}
+.btn-close-chat {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    color: var(--td-gray);
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s;
+    flex-shrink: 0;
+}
+.btn-close-chat:hover { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.chat-messages::-webkit-scrollbar { width: 6px; }
+.chat-messages::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 6px; }
+.chat-messages::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.chat-message {
+    display: flex;
+    gap: 10px;
+    max-width: 95%;
+    animation: msgIn 0.25s ease-out;
+}
+@keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.chat-message.user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+.chat-message.bot {
+    align-self: flex-start;
+}
+.chat-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: .9rem;
+}
+.chat-message.bot .chat-avatar {
+    background: linear-gradient(135deg, #005758, #007a7c);
+    color: #fff;
+}
+.chat-message.user .chat-avatar {
+    background: #e2e8f0;
+    color: #475569;
+}
+.chat-bubble {
+    background: #fff;
+    padding: 12px 14px;
+    border-radius: 4px 12px 12px 12px;
+    font-size: .88rem;
+    line-height: 1.55;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    border: 1px solid #e2e8f0;
+    color: var(--td-dark);
+    min-width: 0;
+    word-wrap: break-word;
+}
+.chat-message.user .chat-bubble {
+    background: var(--td-teal);
+    color: #fff;
+    border: 1px solid var(--td-teal);
+    border-radius: 12px 4px 12px 12px;
+    box-shadow: 0 1px 3px rgba(0,87,88,0.18);
+}
+.chat-welcome-title {
+    font-weight: 700; font-size: .95rem; color: var(--td-dark);
+    margin-bottom: 4px;
+}
+.chat-welcome-sub { color: var(--td-gray); font-size: .82rem; margin-bottom: 8px; }
+.chat-welcome-list { list-style: none; padding: 0; margin: 0 0 4px; }
+.chat-welcome-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; font-size: .82rem; color: var(--td-dark);
+    border-bottom: 1px dashed #f1f5f9;
+}
+.chat-welcome-list li:last-child { border-bottom: none; }
+.chat-welcome-list li i { color: var(--td-teal); font-size: .95rem; width: 16px; text-align: center; }
+.chat-status {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: .8rem;
+    display: flex; align-items: center; gap: 6px;
+    line-height: 1.4;
+}
+.chat-status-warn { background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; }
+.chat-status-ok { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.chat-status i { font-size: .95rem; flex-shrink: 0; }
+.chat-bubble ul { margin: 8px 0 0; padding-left: 18px; }
+.chat-bubble li { margin-bottom: 4px; }
+.chat-bubble code {
+    background: #f1f5f9;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: .82rem;
+    color: #0f766e;
+}
+.chat-message.user .chat-bubble code {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+}
+.chat-input-area {
+    padding: 14px 20px 18px;
+    background: #fff;
+    border-top: 1px solid #e2e8f0;
+    flex-shrink: 0;
+}
+.chat-context-bar {
+    font-size: .73rem;
+    color: var(--td-gray);
+    background: #f8fafc;
+    padding: 7px 11px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #e2e8f0;
+    display: flex; align-items: center; gap: 6px;
+}
+.chat-context-bar i { color: var(--td-teal); }
+.chat-context-bar.has-filter {
+    background: #ecfeff; border-color: #a5f3fc; color: #0e7490;
+}
+.chat-context-bar.has-filter i { color: #0891b2; }
+.chat-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: #fff;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 6px 6px 6px 14px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.chat-input-row:focus-within {
+    border-color: var(--td-teal);
+    box-shadow: 0 0 0 3px rgba(0,87,88,0.10);
+}
+.chat-input-row input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: .88rem;
+    color: var(--td-dark);
+    font-family: inherit;
+}
+.chat-input-row input::placeholder { color: #94a3b8; }
+.chat-send-btn {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: var(--td-teal);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    transition: background .15s, transform .1s;
+}
+.chat-send-btn:hover { background: #003031; }
+.chat-send-btn:active { transform: scale(0.94); }
+.chat-send-btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+.chat-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+.chat-suggestions button {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    color: var(--td-gray);
+    font-size: .74rem;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all .15s;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: inherit;
+}
+.chat-suggestions button i { font-size: .8rem; color: var(--td-teal); }
+.chat-suggestions button:hover {
+    background: rgba(0,87,88,0.06);
+    border-color: var(--td-teal);
+    color: var(--td-teal);
+}
+.chat-typing {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+}
+.chat-typing span {
+    width: 7px;
+    height: 7px;
+    background: #94a3b8;
+    border-radius: 50%;
+    animation: typingBounce 1.2s infinite ease-in-out;
+}
+.chat-typing span:nth-child(2) { animation-delay: .15s; }
+.chat-typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes typingBounce {
+    0%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-6px); }
+}
+/* Markdown formatting in chat */
+.chat-bubble h3, .chat-bubble h4 { 
+    margin: 12px 0 6px; 
+    font-size: .92rem;
+    color: #005758;
+    font-weight: 700;
+}
+
+/* Table wrapper for responsiveness */
+.chat-bubble .table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 12px 0;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.chat-bubble table {
+    width: 100%;
+    min-width: 400px;
+    font-size: .8rem;
+    border-collapse: collapse;
+    margin: 0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.chat-bubble table th, .chat-bubble table td {
+    padding: 10px 14px;
+    border: none;
+    border-bottom: 1px solid #e8edf3;
+    text-align: left;
+    white-space: nowrap;
+}
+.chat-bubble table th {
+    background: linear-gradient(145deg, #005758, #006b6b);
+    color: #fff;
+    font-weight: 600;
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    position: sticky;
+    top: 0;
+}
+.chat-bubble table th:first-child { border-radius: 10px 0 0 0; }
+.chat-bubble table th:last-child { border-radius: 0 10px 0 0; }
+.chat-bubble table td {
+    background: #fff;
+    color: #334155;
+}
+.chat-bubble table td:first-child {
+    font-weight: 600;
+    color: #1e293b;
+}
+.chat-bubble table tr:nth-child(even) td {
+    background: #f8fafc;
+}
+.chat-bubble table tr:hover td {
+    background: #e0f2f1;
+}
+.chat-bubble table tr:last-child td {
+    border-bottom: none;
+}
+.chat-bubble table tr:last-child td:first-child { border-radius: 0 0 0 10px; }
+.chat-bubble table tr:last-child td:last-child { border-radius: 0 0 10px 0; }
+
+/* Scrollbar for table wrapper */
+.chat-bubble .table-wrapper::-webkit-scrollbar {
+    height: 6px;
+}
+.chat-bubble .table-wrapper::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 3px;
+}
+.chat-bubble .table-wrapper::-webkit-scrollbar-thumb {
+    background: linear-gradient(90deg, #94a3b8, #cbd5e1);
+    border-radius: 3px;
+}
+.chat-bubble .table-wrapper::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(90deg, #64748b, #94a3b8);
+}
+
+/* Mobile responsive chat */
+@media (max-width: 768px) {
+    .chat-bubble table {
+        font-size: .72rem;
+        min-width: 280px;
+    }
+    .chat-bubble table th, .chat-bubble table td {
+        padding: 8px 10px;
+        white-space: normal;
+        word-break: break-word;
+    }
+    .chat-bubble table th {
+        font-size: .68rem;
+    }
+    
+    /* Chat panel mobile - full screen */
+    .resource-chat-panel {
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 0;
+        border-left: none;
+    }
+    .chat-header {
+        padding: 12px 14px;
+    }
+    .chat-header-title {
+        font-size: .9rem;
+    }
+    .chat-messages {
+        padding: 12px;
+        gap: 10px;
+    }
+    .chat-message {
+        max-width: 98%;
+    }
+    .chat-avatar {
+        width: 28px;
+        height: 28px;
+        font-size: .8rem;
+    }
+    .chat-bubble {
+        padding: 10px 12px;
+        font-size: .82rem;
+        line-height: 1.5;
+        border-radius: 4px 12px 12px 12px;
+    }
+    .chat-message.user .chat-bubble {
+        border-radius: 12px 4px 12px 12px;
+    }
+    .chat-bubble ul {
+        padding-left: 14px;
+        margin: 6px 0 0;
+    }
+    .chat-bubble li {
+        font-size: .8rem;
+        margin-bottom: 3px;
+    }
+    .chat-input-area {
+        padding: 10px 12px 14px;
+    }
+    .chat-context-bar {
+        font-size: .7rem;
+        padding: 6px 10px;
+        margin-bottom: 10px;
+    }
+    .chat-input-row {
+        padding: 6px 8px 6px 12px;
+        border-radius: 10px;
+    }
+    .chat-input-row input {
+        font-size: .85rem;
+    }
+    .chat-input-row .btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+    }
+    .chat-suggestions {
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .chat-suggestions button {
+        font-size: .68rem;
+        padding: 5px 8px;
+        border-radius: 6px;
+        flex: 0 1 auto;
+    }
+    .chat-suggestions button i {
+        display: none;
+    }
+    
+    /* Table wrapper adjustments */
+    .chat-bubble .table-wrapper {
+        margin: 10px -12px;
+        padding: 0 12px;
+        border-radius: 0;
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-bubble table {
+        font-size: .65rem;
+        min-width: 240px;
+    }
+    .chat-bubble table th, .chat-bubble table td {
+        padding: 6px 8px;
+    }
+    .chat-bubble table th {
+        font-size: .62rem;
+    }
+    .chat-bubble {
+        padding: 8px 10px;
+        font-size: .78rem;
+    }
+    .chat-bubble li {
+        font-size: .75rem;
+    }
+    .chat-avatar {
+        width: 24px;
+        height: 24px;
+        font-size: .7rem;
+    }
+    .chat-message {
+        gap: 8px;
+    }
+    .chat-suggestions {
+        gap: 4px;
+    }
+    .chat-suggestions button {
+        font-size: .64rem;
+        padding: 4px 6px;
+    }
+    .chat-header-title span {
+        font-size: .85rem;
+    }
+    .chat-input-row input {
+        font-size: .8rem;
+    }
+    .chat-input-row input::placeholder {
+        font-size: .75rem;
+    }
+}
+
+/* FAB Button - canto inferior ESQUERDO, com label */
+#chatFab {
+    display: inline-flex;
+    position: fixed;
+    bottom: 22px;
+    left: 22px;
+    height: 48px;
+    padding: 0 18px 0 14px;
+    gap: 9px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--td-teal) 0%, #007a7c 100%);
+    border: none;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 18px rgba(0,87,88,0.32), 0 1px 3px rgba(0,87,88,0.18);
+    z-index: 999;
+    transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+    color: #fff;
+    font-family: 'Inter','Segoe UI',sans-serif;
+    font-size: .88rem;
+    font-weight: 600;
+    letter-spacing: .01em;
+}
+#chatFab i { font-size: 1.15rem; color: var(--td-yellow); }
+#chatFab .chat-fab-label { white-space: nowrap; }
+#chatFab:hover {
+    box-shadow: 0 6px 24px rgba(0,87,88,0.45), 0 2px 6px rgba(0,87,88,0.22);
+    transform: translateY(-1px);
+}
+#chatFab:active { transform: translateY(0) scale(0.97); }
+#chatFab.hidden { display: none; }
+
+/* FAB responsive */
+@media (max-width: 768px) {
+    #chatFab {
+        bottom: 16px;
+        left: 16px;
+        height: 44px;
+        padding: 0 16px 0 12px;
+        font-size: .82rem;
+    }
+    #chatFab i { font-size: 1.05rem; }
+}
+@media (max-width: 480px) {
+    #chatFab {
+        bottom: 14px;
+        left: 14px;
+        height: 44px;
+        width: 44px;
+        padding: 0;
+        border-radius: 50%;
+    }
+    #chatFab .chat-fab-label { display: none; }
+    #chatFab i { font-size: 1.15rem; }
+}
+</style>
 
 </body>
 </html>

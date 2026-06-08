@@ -1,8 +1,16 @@
 <?php
 // filepath: public/sql-advisor.php
 session_start();
+
+// Governança T2: valida token interno (no-op em desenvolvimento)
+require_once __DIR__ . '/../src/Shared/Services/governance-guard.php';
+
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
+
 require_once __DIR__ . '/../vendor/autoload.php';
 use App\Features\SqlLicensing\Services\LicensingAdvisor;
+use App\Shared\Services\GovernanceClient;
 
 // Lê preços do skus.json
 $jsonFile = __DIR__ . '/skus.json';
@@ -51,6 +59,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calculate_advisor']) 
     $result = $advisor->compareAll($advisorParams);
     $_SESSION['advisorResult'] = $result;
 
+    // Governança T2: registra evento de uso (best-effort, no-op em DEV)
+    GovernanceClient::fromGlobals()->recordUsage('sql');
+
     echo json_encode($result);
     exit;
 }
@@ -77,6 +88,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calculate_advisor']))
     $advisor = new LicensingAdvisor($_SESSION['prices']);
     $advisorResult = $advisor->compareAll($advisorParams);
     $_SESSION['advisorResult'] = $advisorResult;
+
+    // Governança T2: registra evento de uso (best-effort, no-op em DEV)
+    GovernanceClient::fromGlobals()->recordUsage('sql');
+}
+
+// Salvar como proposta (governança T2)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_proposal'])) {
+    $gov = GovernanceClient::fromGlobals();
+    $res = $_SESSION['advisorResult'] ?? null;
+    if ($res && $gov->isEnabled()) {
+        $p = $res['params'] ?? [];
+        $best = $res['bestModel'] ?? '';
+        $bestMonthly = isset($res[$best]['monthly']) ? (float)$res[$best]['monthly'] : 0.0;
+        $clientName = trim((string)($_POST['customerName'] ?? $p['clientName'] ?? ''));
+        $title = trim((string)($_POST['proposalTitle'] ?? ''));
+        if ($title === '') {
+            $title = 'SQL Licensing Advisor' . ($clientName !== '' ? ' - ' . $clientName : '');
+        }
+        $proposalId = $gov->createProposal([
+            'analysisType'  => 'sql',
+            'title'         => $title,
+            'customerName'  => $clientName,
+            'customerTaxId' => trim((string)($_POST['customerTaxId'] ?? '')),
+            'totalValue'    => $bestMonthly,
+            'resultSummary' => [
+                'bestModel'   => $best,
+                'bestMonthly' => $bestMonthly,
+                'vCores'      => $p['vCores']  ?? 0,
+                'edition'     => $p['edition'] ?? '',
+                'currency'    => $p['currency'] ?? 'USD',
+                'hasSA'       => $p['hasSA']   ?? false,
+            ],
+        ]);
+        if ($proposalId !== null) {
+            $json = json_encode($res, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '{}';
+            $gov->uploadProposalFile(
+                $proposalId,
+                'sql_advisor_' . date('Y-m-d') . '.json',
+                'application/json',
+                $json
+            );
+            $_SESSION['proposalSaved'] = true;
+        }
+    }
+    header('Location: sql-advisor.php');
+    exit;
 }
 
 // Se já tem resultado em sessão e é GET, mostra
@@ -88,18 +145,17 @@ $adv = $_SESSION['advisor'];
 $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="<?= getHtmlLang() ?>">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SQL Licensing Advisor - TD SYNNEX</title>
+  <title><?= __('pages.sql_advisor') ?></title>
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    /* ===== CHAT PANEL ===== */
-    /* Chat começa recolhido em TODAS as telas */
+    /* ===== CHAT PANEL - REDESIGN MODERNO ===== */
     .chat-wrap {
       display: none;
       position: fixed;
@@ -110,120 +166,354 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
       justify-content: flex-end;
       padding: 0;
       pointer-events: none;
-      transition: background 0.25s ease;
+      transition: background 0.3s ease;
     }
     .chat-wrap.chat-open {
       display: flex;
-      background: rgba(0,0,0,0.35);
+      background: rgba(15,23,42,0.4);
+      backdrop-filter: blur(4px);
       pointer-events: all;
-      animation: fadeIn 0.2s ease;
+      animation: fadeIn 0.25s ease;
     }
-    /* Desktop: painel flutuante inferior-direito */
+    /* Desktop: painel flutuante com visual premium */
     .chat-wrap.chat-open .chat-card {
       position: fixed;
       bottom: 0;
       right: 24px;
-      width: 440px;
-      height: 640px;
-      max-height: calc(100vh - 40px);
-      border-radius: 16px 16px 0 0;
-      animation: slideUp 0.3s cubic-bezier(0.34,1.15,0.64,1);
+      width: 460px;
+      height: 680px;
+      max-height: calc(100vh - 32px);
+      border-radius: 24px 24px 0 0;
+      animation: slideUp 0.35s cubic-bezier(0.34,1.15,0.64,1);
     }
-    .chat-card { display: flex; flex-direction: column; background: #fff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 8px 40px rgba(0,0,0,0.15); overflow: hidden; }
-    /* Botão fechar chat — visível sempre quando aberto */
+    .chat-card {
+      display: flex;
+      flex-direction: column;
+      background: #ffffff;
+      border-radius: 24px;
+      border: none;
+      box-shadow: 0 25px 80px rgba(0,0,0,0.25), 0 10px 30px rgba(0,87,88,0.15);
+      overflow: hidden;
+    }
+    /* Botão fechar chat - redesign */
     #chatMobileClose {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.2);
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.18);
       cursor: pointer;
       color: #fff;
       flex-shrink: 0;
-      transition: background 0.15s;
+      transition: all 0.2s ease;
     }
-    #chatMobileClose:hover { background: rgba(255,255,255,0.25); }
-    /* FAB — visível por padrão */
+    #chatMobileClose:hover {
+      background: rgba(255,255,255,0.22);
+      transform: scale(1.05);
+    }
+    /* FAB - botão flutuante premium */
     #chatFab {
       display: flex;
       position: fixed;
-      bottom: 22px;
-      right: 22px;
-      width: 58px;
-      height: 58px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #002829 0%, #005758 100%);
+      bottom: 24px;
+      right: 24px;
+      width: 64px;
+      height: 64px;
+      border-radius: 20px;
+      background: linear-gradient(145deg, #005758 0%, #008b8b 50%, #00a5a5 100%);
       border: none;
       cursor: pointer;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 4px 20px rgba(0,87,88,0.45);
+      box-shadow: 0 8px 32px rgba(0,87,88,0.4), 0 4px 12px rgba(0,87,88,0.3), inset 0 1px 0 rgba(255,255,255,0.2);
       z-index: 999;
-      transition: transform 0.2s, box-shadow 0.2s;
+      transition: all 0.3s cubic-bezier(0.34,1.15,0.64,1);
     }
-    #chatFab:hover { box-shadow: 0 6px 28px rgba(0,87,88,0.6); transform: scale(1.05); }
-    #chatFab:active { transform: scale(0.93); }
+    #chatFab::before {
+      content: '';
+      position: absolute;
+      inset: -3px;
+      border-radius: 23px;
+      background: linear-gradient(145deg, rgba(0,165,165,0.5), rgba(0,87,88,0.3));
+      z-index: -1;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #chatFab:hover {
+      box-shadow: 0 12px 40px rgba(0,87,88,0.5), 0 6px 16px rgba(0,87,88,0.4);
+      transform: translateY(-3px) scale(1.02);
+    }
+    #chatFab:hover::before { opacity: 1; }
+    #chatFab:active { transform: translateY(0) scale(0.95); }
     #chatFab.chat-fab-hidden { display: none; }
-    .chat-header { background: linear-gradient(135deg, #002829 0%, #005758 100%); padding: 16px 20px; flex-shrink: 0; }
-    .chat-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 20px; background: #f8fafc; }
-    .chat-messages::-webkit-scrollbar { width: 6px; }
-    .chat-messages::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 6px; }
-    .chat-messages::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    
+    /* Chat Header - visual premium com gradiente */
+    .chat-header {
+      background: linear-gradient(145deg, #003d3d 0%, #005758 40%, #006b6b 100%);
+      padding: 20px 24px;
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .chat-header::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+    .chat-header::after {
+      content: '';
+      position: absolute;
+      bottom: -30%;
+      left: -10%;
+      width: 120px;
+      height: 120px;
+      background: radial-gradient(circle, rgba(0,200,200,0.15) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+    
+    /* Área de mensagens */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 24px;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    }
+    .chat-messages::-webkit-scrollbar { width: 5px; }
+    .chat-messages::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #94a3b8, #cbd5e1); border-radius: 10px; }
+    .chat-messages::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #64748b, #94a3b8); }
     .chat-messages::-webkit-scrollbar-track { background: transparent; }
-    .msg-container { display: flex; flex-direction: column; max-width: 95%; animation: msgIn 0.25s ease-out; }
-    @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    
+    /* Containers de mensagem */
+    .msg-container {
+      display: flex;
+      flex-direction: column;
+      max-width: 92%;
+      animation: msgIn 0.3s cubic-bezier(0.34,1.15,0.64,1);
+    }
+    @keyframes msgIn { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    
     .msg-user { align-self: flex-end; align-items: flex-end; }
     .msg-assistant { align-self: flex-start; align-items: flex-start; }
-    .chat-bubble-assistant { background: #fff; border: 1px solid #e8edf3; border-radius: 4px 16px 16px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); padding: 14px 18px; font-size: 0.875rem; color: #1e293b; line-height: 1.7; }
-    .chat-bubble-user { background: linear-gradient(135deg, #005758, #007a7c); border-radius: 16px 4px 16px 16px; padding: 14px 18px; font-size: 0.875rem; color: #fff; line-height: 1.7; box-shadow: 0 2px 8px rgba(0,87,88,0.25); }
-    .msg-meta { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    
+    /* Balões de chat redesign */
+    .chat-bubble-assistant {
+      background: #ffffff;
+      border: none;
+      border-radius: 6px 20px 20px 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+      padding: 16px 20px;
+      font-size: 0.9rem;
+      color: #1e293b;
+      line-height: 1.7;
+    }
+    .chat-bubble-user {
+      background: linear-gradient(145deg, #005758 0%, #007a7c 100%);
+      border-radius: 20px 6px 20px 20px;
+      padding: 16px 20px;
+      font-size: 0.9rem;
+      color: #fff;
+      line-height: 1.7;
+      box-shadow: 0 4px 16px rgba(0,87,88,0.3), 0 2px 6px rgba(0,87,88,0.2);
+    }
+    
+    /* Meta info */
+    .msg-meta {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .msg-user .msg-meta { color: #94a3b8; justify-content: flex-end; }
     .msg-assistant .msg-meta { color: #64748b; }
-    .ai-avatar { width: 22px; height: 22px; border-radius: 6px; background: #005758; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: white; letter-spacing: 0; flex-shrink: 0; }
-    .chat-input-area { padding: 14px 16px 16px; background: #fff; border-top: 1px solid #e8edf3; flex-shrink: 0; }
-    .chat-input-wrap { display: flex; gap: 8px; align-items: center; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 8px 8px 8px 14px; transition: border-color 0.2s, box-shadow 0.2s; }
-    .chat-input-wrap:focus-within { border-color: #005758; box-shadow: 0 0 0 3px rgba(0,87,88,0.08); background: #fff; }
-    #chatInput { flex: 1; background: transparent; border: none; outline: none; font-size: 0.875rem; color: #1e293b; resize: none; min-height: 20px; max-height: 80px; padding: 4px 0; }
+    
+    /* Avatar IA premium */
+    .ai-avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: linear-gradient(145deg, #005758, #008b8b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 800;
+      color: white;
+      letter-spacing: 0;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(0,87,88,0.3);
+    }
+    
+    /* Área de input redesign */
+    .chat-input-area {
+      padding: 16px 20px 20px;
+      background: #ffffff;
+      border-top: 1px solid rgba(226,232,240,0.8);
+      flex-shrink: 0;
+    }
+    .chat-input-wrap {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: #f8fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 10px 10px 10px 18px;
+      transition: all 0.25s ease;
+    }
+    .chat-input-wrap:focus-within {
+      border-color: #005758;
+      box-shadow: 0 0 0 4px rgba(0,87,88,0.1), 0 4px 12px rgba(0,87,88,0.08);
+      background: #fff;
+    }
+    #chatInput {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-size: 0.9rem;
+      color: #1e293b;
+      resize: none;
+      min-height: 22px;
+      max-height: 80px;
+      padding: 4px 0;
+      font-family: 'Inter', sans-serif;
+    }
     #chatInput::placeholder { color: #94a3b8; }
-    .chat-send-btn { width: 36px; height: 36px; border-radius: 10px; background: #005758; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.2s, transform 0.1s; }
-    .chat-send-btn:hover { background: #007a7c; }
-    .chat-send-btn:active { transform: scale(0.93); }
-    .chat-send-btn.is-stop { background: #dc2626; }
-    .chat-send-btn.is-stop:hover { background: #b91c1c; }
-    .quick-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-    .quick-btn { font-size: 0.7rem; font-weight: 500; padding: 6px 12px; background: #f1f5f9; border: 1px solid #e2e8f0; color: #475569; border-radius: 8px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
-    .quick-btn:hover { background: #e0f2f1; border-color: #99f6e4; color: #005758; }
-    /* Suggestion cards */
-    .prompt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
-    .prompt-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: all 0.15s ease; text-align: left; }
-    .prompt-card:hover { background: #e0f2f1; border-color: #99f6e4; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,87,88,0.08); }
-    .prompt-card-icon { font-size: 1.1rem; margin-bottom: 4px; }
-    .prompt-card-text { font-size: 0.72rem; color: #334155; line-height: 1.35; font-weight: 500; }
-    .prompt-card:hover .prompt-card-text { color: #005758; }
-    .markdown-content code { background: #f1f5f9; padding: 2px 6px; border-radius: 5px; font-size: 0.78em; font-family: monospace; color: #0f766e; }
-    .markdown-content strong { font-weight: 700; }
-    .markdown-content a { color: #0078D4; text-decoration: underline; }
-    .markdown-content ul, .markdown-content ol { padding-left: 1.2rem; margin-top: 8px; }
-    .markdown-content li { margin-bottom: 4px; }
-    .markdown-content h3 { font-size: 0.9rem; font-weight: 700; margin: 12px 0 6px; color: #005758; }
-    .markdown-content h4 { font-size: 0.85rem; font-weight: 700; margin: 10px 0 4px; color: #334155; }
-    .markdown-content hr { border: none; border-top: 1px solid #e2e8f0; margin: 12px 0; }
-    .markdown-content table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.78rem; line-height: 1.4; }
-    .markdown-content table th { background: #005758; color: #fff; font-weight: 600; padding: 8px 10px; text-align: left; white-space: nowrap; }
-    .markdown-content table th:first-child { border-radius: 6px 0 0 0; }
-    .markdown-content table th:last-child { border-radius: 0 6px 0 0; }
-    .markdown-content table td { padding: 7px 10px; border-bottom: 1px solid #e8edf3; color: #334155; }
+    
+    /* Botão enviar premium */
+    .chat-send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: linear-gradient(145deg, #005758, #007a7c);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.25s ease;
+      box-shadow: 0 2px 8px rgba(0,87,88,0.3);
+    }
+    .chat-send-btn:hover {
+      background: linear-gradient(145deg, #006b6b, #008b8b);
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px rgba(0,87,88,0.4);
+    }
+    .chat-send-btn:active { transform: scale(0.95); }
+    .chat-send-btn.is-stop { background: linear-gradient(145deg, #dc2626, #ef4444); }
+    .chat-send-btn.is-stop:hover { background: linear-gradient(145deg, #b91c1c, #dc2626); }
+    
+    /* Cards de sugestão premium */
+    .prompt-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .prompt-card {
+      background: linear-gradient(145deg, #f8fafc, #f1f5f9);
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.34,1.15,0.64,1);
+      text-align: left;
+      position: relative;
+      overflow: hidden;
+    }
+    .prompt-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #005758, #00a5a5);
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    .prompt-card:hover {
+      background: linear-gradient(145deg, #e0f2f1, #ccfbf1);
+      border-color: #5eead4;
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0,87,88,0.12);
+    }
+    .prompt-card:hover::before { opacity: 1; }
+    .prompt-card-icon {
+      font-size: 1.3rem;
+      margin-bottom: 6px;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+    }
+    .prompt-card-text {
+      font-size: 0.75rem;
+      color: #475569;
+      line-height: 1.4;
+      font-weight: 500;
+    }
+    .prompt-card:hover .prompt-card-text { color: #005758; font-weight: 600; }
+    
+    /* Markdown content */
+    .markdown-content code {
+      background: linear-gradient(145deg, #f1f5f9, #e2e8f0);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.8em;
+      font-family: 'Monaco', 'Menlo', monospace;
+      color: #0f766e;
+      border: 1px solid #e2e8f0;
+    }
+    .markdown-content strong { font-weight: 700; color: #0f172a; }
+    .markdown-content a { color: #0078D4; text-decoration: none; border-bottom: 1px solid rgba(0,120,212,0.3); transition: border-color 0.2s; }
+    .markdown-content a:hover { border-bottom-color: #0078D4; }
+    .markdown-content ul, .markdown-content ol { padding-left: 1.3rem; margin-top: 10px; }
+    .markdown-content li { margin-bottom: 6px; }
+    .markdown-content h3 { font-size: 0.95rem; font-weight: 700; margin: 14px 0 8px; color: #005758; }
+    .markdown-content h4 { font-size: 0.88rem; font-weight: 700; margin: 12px 0 6px; color: #334155; }
+    .markdown-content hr { border: none; border-top: 1px solid #e2e8f0; margin: 14px 0; }
+    .markdown-content table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.8rem; line-height: 1.5; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    .markdown-content table th { background: linear-gradient(145deg, #005758, #006b6b); color: #fff; font-weight: 600; padding: 10px 12px; text-align: left; white-space: nowrap; }
+    .markdown-content table th:first-child { border-radius: 0; }
+    .markdown-content table th:last-child { border-radius: 0; }
+    .markdown-content table td { padding: 9px 12px; border-bottom: 1px solid #e8edf3; color: #334155; background: #fff; }
     .markdown-content table tr:nth-child(even) td { background: #f8fafc; }
     .markdown-content table tr:hover td { background: #e0f2f1; }
     .markdown-content table td:first-child { font-weight: 600; color: #1e293b; }
-    @keyframes bounceTyping { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
-    .typing-dot { width: 7px; height: 7px; background: #94a3b8; border-radius: 50%; display: inline-block; margin: 0 2px; animation: bounceTyping 1.2s infinite ease-in-out; }
+    
+    /* Typing animation */
+    @keyframes bounceTyping { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-8px)} }
+    .typing-dot {
+      width: 8px;
+      height: 8px;
+      background: linear-gradient(145deg, #94a3b8, #64748b);
+      border-radius: 50%;
+      display: inline-block;
+      margin: 0 3px;
+      animation: bounceTyping 1.4s infinite ease-in-out;
+    }
+    .typing-dot:nth-child(1) { animation-delay: 0s; }
+    .typing-dot:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+    
     /* ===== TABLE ===== */
     .advisor-table th { padding: 12px 16px; text-align: left; font-size: 0.85rem; white-space: nowrap; }
     .advisor-table td { padding: 12px 16px; font-size: 0.9rem; white-space: nowrap; }
@@ -466,14 +756,18 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
       margin: 0 auto;
     }
 
-    /* Mobile: painel full-width bottom sheet */
+    /* Mobile: painel full-width bottom sheet premium */
     @media (max-width: 768px) {
       .chat-wrap.chat-open .chat-card {
         right: 0 !important;
         width: 100% !important;
-        height: 88vh !important;
-        max-height: 88vh !important;
-        border-radius: 20px 20px 0 0 !important;
+        height: 92vh !important;
+        max-height: 92vh !important;
+        border-radius: 24px 24px 0 0 !important;
+        box-shadow: 0 -10px 60px rgba(0,0,0,0.3) !important;
+      }
+      .chat-wrap.chat-open {
+        background: rgba(15,23,42,0.5) !important;
       }
     }
 
@@ -539,23 +833,42 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
         font-size: 0.78rem !important;
       }
 
-      /* Chat internals (mobile adjustments) */
-      .chat-header { padding: 12px 14px !important; }
-      .chat-messages { padding: 14px !important; gap: 12px !important; }
-      .chat-input-area { padding: 10px 12px 12px !important; }
+      /* Chat internals (mobile adjustments premium) */
+      .chat-header { padding: 16px 18px !important; }
+      .chat-header .ai-avatar { width: 38px !important; height: 38px !important; border-radius: 12px !important; }
+      .chat-header h3 { font-size: 0.88rem !important; }
+      .chat-messages { padding: 16px !important; gap: 14px !important; }
+      .chat-input-area { padding: 12px 16px 16px !important; }
       .chat-bubble-assistant,
       .chat-bubble-user {
-        padding: 10px 14px !important;
-        font-size: 0.82rem !important;
+        padding: 14px 16px !important;
+        font-size: 0.85rem !important;
+        border-radius: 16px !important;
       }
+      .chat-bubble-assistant { border-radius: 4px 16px 16px 16px !important; }
+      .chat-bubble-user { border-radius: 16px 4px 16px 16px !important; }
+      .chat-input-wrap {
+        padding: 8px 8px 8px 14px !important;
+        border-radius: 14px !important;
+      }
+      .chat-send-btn { width: 38px !important; height: 38px !important; border-radius: 12px !important; }
       .prompt-grid {
         grid-template-columns: 1fr !important;
-        gap: 6px !important;
+        gap: 8px !important;
       }
-      .prompt-card { padding: 8px 10px !important; }
-      .prompt-card-text { font-size: 0.68rem !important; }
-      .prompt-card-icon { font-size: 0.95rem !important; }
-      #chatFab { bottom: 18px !important; right: 18px !important; width: 52px !important; height: 52px !important; }
+      .prompt-card { 
+        padding: 12px 14px !important; 
+        border-radius: 12px !important;
+      }
+      .prompt-card-text { font-size: 0.72rem !important; }
+      .prompt-card-icon { font-size: 1.1rem !important; }
+      #chatFab { 
+        bottom: 20px !important; 
+        right: 20px !important; 
+        width: 58px !important; 
+        height: 58px !important; 
+        border-radius: 18px !important;
+      }
 
       /* Disclaimer */
       .mt-6.p-4.bg-slate-50 { padding: 10px !important; }
@@ -570,8 +883,10 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
       .adv-form-body { padding: 10px !important; }
       .adv-form-header { padding: 8px 10px !important; }
       .adv-btn-submit { font-size: 12px !important; gap: 4px !important; }
-      .chat-wrap.chat-open .chat-card { height: 95vh !important; max-height: 95vh !important; }
-      #chatFab { bottom: 14px !important; right: 14px !important; width: 48px !important; height: 48px !important; }
+      .chat-wrap.chat-open .chat-card { height: 95vh !important; max-height: 95vh !important; border-radius: 20px 20px 0 0 !important; }
+      #chatFab { bottom: 16px !important; right: 16px !important; width: 52px !important; height: 52px !important; }
+      .chat-header { padding: 14px 16px !important; }
+      .prompt-card { padding: 10px 12px !important; }
     }
   </style>
 </head>
@@ -595,11 +910,11 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
               <div class="adv-form-icon">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               </div>
-              <span class="adv-form-title">Parâmetros da Comparação</span>
+              <span class="adv-form-title"><?= __('page_content.sql_title') ?></span>
             </div>
             <a href="sku-management.php" class="adv-sku-link">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-              Editar SKUs
+              <?= __('menu.sku_management') ?>
             </a>
           </div>
 
@@ -609,11 +924,11 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
             <!-- Row 1: Cliente + Vendedor -->
             <div class="adv-row">
               <div class="adv-field">
-                <label class="adv-label">Cliente Final</label>
-                <input type="text" name="clientName" value="<?php echo htmlspecialchars($adv['clientName']); ?>" placeholder="Nome da empresa" class="adv-input">
+                <label class="adv-label"><?= __('page_content.sql_client_name') ?></label>
+                <input type="text" name="clientName" value="<?php echo htmlspecialchars($adv['clientName']); ?>" placeholder="<?= __('page_content.sql_client_name') ?>" class="adv-input">
               </div>
               <div class="adv-field">
-                <label class="adv-label">Consultor / Vendedor</label>
+                <label class="adv-label"><?= __('page_content.sql_vendor_name') ?></label>
                 <input type="text" name="vendorName" value="<?php echo htmlspecialchars($adv['vendorName']); ?>" placeholder="Seu nome" class="adv-input">
               </div>
             </div>
@@ -688,33 +1003,66 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
 
         <!-- Container para Resultados (renderizado via JS) -->
         <div id="advisorResults"></div>
+
+        <?php if (!empty($GLOBALS['gov_user']['token'])): ?>
+        <!-- Governança T2: salvar resultado como proposta -->
+        <div id="saveProposalWrap" style="margin-top:16px;<?php echo isset($_SESSION['advisorResult']) ? '' : 'display:none;'; ?>">
+          <?php if (!empty($_SESSION['proposalSaved'])): ?>
+          <div style="background:#dcfce7;border:1px solid #86efac;color:#166534;padding:10px 14px;border-radius:8px;font-size:.85rem;margin-bottom:10px;">
+            <i class="bi bi-check-circle me-1"></i>Proposta salva no portal! Voce pode revisita-la a qualquer momento.
+          </div>
+          <?php unset($_SESSION['proposalSaved']); endif; ?>
+          <form method="POST" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+            <input type="hidden" name="save_proposal" value="1">
+            <div style="flex:1;min-width:160px;">
+              <label class="adv-label">Cliente final</label>
+              <input type="text" name="customerName" class="adv-input" value="<?php echo htmlspecialchars((string)($adv['clientName'] ?? '')); ?>">
+            </div>
+            <div style="flex:1;min-width:160px;">
+              <label class="adv-label">CNPJ (opcional)</label>
+              <input type="text" name="customerTaxId" class="adv-input" placeholder="00.000.000/0000-00">
+            </div>
+            <button type="submit" class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none;padding:8px 16px;border-radius:8px;">
+              <i class="bi bi-cloud-arrow-up me-1"></i>Salvar como Proposta
+            </button>
+          </form>
+        </div>
+        <?php endif; ?>
       </div>
 
       <!-- COLUNA DIREITA: Chat IA -->
       <div class="chat-wrap">
       <div class="chat-card">
 
-        <!-- Header -->
+        <!-- Header Premium -->
         <div class="chat-header">
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between" style="position:relative;z-index:1;">
             <div class="flex items-center gap-3">
-              <div class="ai-avatar" style="width:34px;height:34px;border-radius:10px;font-size:12px;">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" style="width:18px;height:18px;">
+              <div class="ai-avatar" style="width:44px;height:44px;border-radius:14px;font-size:14px;background:linear-gradient(145deg, rgba(255,255,255,0.2), rgba(255,255,255,0.05));border:1px solid rgba(255,255,255,0.15);box-shadow:0 4px 16px rgba(0,0,0,0.2);">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" style="width:22px;height:22px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.2));">
                   <path fill-rule="evenodd" d="M9 4.5a.75.75 0 0 1 .721.544l.813 2.846a3.75 3.75 0 0 0 2.576 2.576l2.846.813a.75.75 0 0 1 0 1.442l-2.846.813a3.75 3.75 0 0 0-2.576 2.576l-.813 2.846a.75.75 0 0 1-1.442 0l-.813-2.846a3.75 3.75 0 0 0-2.576-2.576l-2.846-.813a.75.75 0 0 1 0-1.442l2.846-.813A3.75 3.75 0 0 0 7.466 7.89l.813-2.846A.75.75 0 0 1 9 4.5Z" clip-rule="evenodd" />
+                  <path fill-rule="evenodd" d="M15 15a.75.75 0 0 1 .728.568l.258.902a2.25 2.25 0 0 0 1.544 1.544l.902.258a.75.75 0 0 1 0 1.456l-.902.258a2.25 2.25 0 0 0-1.544 1.544l-.258.902a.75.75 0 0 1-1.456 0l-.258-.902a2.25 2.25 0 0 0-1.544-1.544l-.902-.258a.75.75 0 0 1 0-1.456l.902-.258a2.25 2.25 0 0 0 1.544-1.544l.258-.902A.75.75 0 0 1 15 15Z" clip-rule="evenodd" opacity="0.6"/>
                 </svg>
               </div>
               <div>
-                <h3 style="color:#fff;font-weight:700;font-size:0.88rem;line-height:1.2;">Especialista em Licenciamento</h3>
-                <p style="color:rgba(153,246,228,0.8);font-size:0.7rem;margin-top:2px;font-weight:500;">TD SYNNEX · SQL Server 2022</p>
+                <h3 style="color:#fff;font-weight:700;font-size:0.95rem;line-height:1.2;text-shadow:0 1px 2px rgba(0,0,0,0.2);">Especialista em Licenciamento</h3>
+                <p style="color:rgba(153,246,228,0.9);font-size:0.72rem;margin-top:4px;font-weight:500;display:flex;align-items:center;gap:6px;">
+                  <span style="display:inline-flex;align-items:center;gap:4px;">
+                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                    TD SYNNEX
+                  </span>
+                  <span style="opacity:0.6;">·</span>
+                  <span>SQL Server 2022</span>
+                </p>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <div style="display:flex;align-items:center;gap:5px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:4px 10px;">
-                <div style="width:6px;height:6px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80;"></div>
-                <span style="color:rgba(209,250,229,0.9);font-size:0.68rem;font-weight:600;letter-spacing:0.03em;">GPT-4o</span>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.18);border-radius:10px;padding:6px 12px;backdrop-filter:blur(8px);">
+                <div style="width:8px;height:8px;border-radius:50%;background:#4ade80;box-shadow:0 0 8px #4ade80,0 0 16px rgba(74,222,128,0.4);animation:pulse 2s infinite;"></div>
+                <span style="color:rgba(255,255,255,0.95);font-size:0.72rem;font-weight:600;letter-spacing:0.04em;">GPT-4o</span>
               </div>
               <button id="chatMobileClose" aria-label="Fechar chat" title="Minimizar chat">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="white" style="width:16px;height:16px;"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="white" style="width:18px;height:18px;"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>
               </button>
             </div>
           </div>
@@ -723,9 +1071,16 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
         <!-- Mensagens -->
         <div class="chat-messages" id="chatMessages">
           <div class="msg-container msg-assistant">
-            <div class="msg-meta"><div class="ai-avatar">IA</div>Especialista</div>
+            <div class="msg-meta">
+              <div class="ai-avatar">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" style="width:14px;height:14px;">
+                  <path fill-rule="evenodd" d="M9 4.5a.75.75 0 0 1 .721.544l.813 2.846a3.75 3.75 0 0 0 2.576 2.576l2.846.813a.75.75 0 0 1 0 1.442l-2.846.813a3.75 3.75 0 0 0-2.576 2.576l-.813 2.846a.75.75 0 0 1-1.442 0l-.813-2.846a3.75 3.75 0 0 0-2.576-2.576l-2.846-.813a.75.75 0 0 1 0-1.442l2.846-.813A3.75 3.75 0 0 0 7.466 7.89l.813-2.846A.75.75 0 0 1 9 4.5Z" clip-rule="evenodd" />
+                </svg>
+              </div>
+              Especialista
+            </div>
             <div class="chat-bubble-assistant markdown-content">
-              <strong>Olá!</strong> Sou o especialista em licenciamento SQL Server 2022 da TD SYNNEX. Como posso ajudar na sua venda hoje?
+              <strong style="color:#005758;">Olá!</strong> Sou o especialista em licenciamento SQL Server 2022 da TD SYNNEX. Como posso ajudar na sua venda hoje?
               <div class="prompt-grid" id="promptSuggestions">
                 <div class="prompt-card" onclick="askQuickQuestion('Meu cliente tem 2 servidores com 16 cores cada e 5 VMs rodando SQL. Quero apresentar a melhor opção de licenciamento. Monte uma comparação com os modelos disponíveis e destaque a economia do ARC.')">
                   <div class="prompt-card-icon">💼</div>
@@ -764,20 +1119,23 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
           </div>
         </div>
 
-        <!-- Input Area -->
+        <!-- Input Area Premium -->
         <div class="chat-input-area">
           <div class="chat-input-wrap">
             <input type="text" id="chatInput" placeholder="Pergunte sobre licenciamento SQL Server..."
                    onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();handleChatBtn();}">
-            <button class="chat-send-btn" id="chatSendBtn" onclick="handleChatBtn()" title="Enviar">
-              <svg id="sendIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="white" style="width:16px;height:16px;transform:rotate(45deg);">
+            <button class="chat-send-btn" id="chatSendBtn" onclick="handleChatBtn()" title="Enviar mensagem">
+              <svg id="sendIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="white" style="width:18px;height:18px;transform:rotate(45deg);filter:drop-shadow(0 1px 2px rgba(0,0,0,0.2));">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
               </svg>
-              <svg id="stopIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" style="width:16px;height:16px;display:none;">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
+              <svg id="stopIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" style="width:18px;height:18px;display:none;">
+                <rect x="6" y="6" width="12" height="12" rx="3" />
               </svg>
             </button>
           </div>
+          <p style="text-align:center;font-size:0.68rem;color:#94a3b8;margin-top:10px;font-weight:500;">
+            Powered by <strong style="color:#005758;">GPT-4o</strong> · Respostas em tempo real
+          </p>
         </div>
 
       </div> <!-- /chat-card -->
@@ -785,10 +1143,11 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
 
     </div><!-- /grid -->
 
-  <!-- Mobile floating chat button -->
-  <button id="chatFab" aria-label="Abrir chat especialista" title="Especialista em Licenciamento">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="white" style="width:26px;height:26px;">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+  <!-- Mobile floating chat button - Premium Design -->
+  <button id="chatFab" aria-label="Abrir chat especialista" title="Especialista em Licenciamento SQL">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="white" style="width:28px;height:28px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.2));">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+    </svg>
     </svg>
   </button>
 
@@ -921,6 +1280,8 @@ $currencySymbol = ($adv['currency'] ?? 'USD') === 'BRL' ? 'R$' : '$';
       .then(r => r.json())
       .then(data => {
         renderAdvisorResults(data);
+        var wrap = document.getElementById('saveProposalWrap');
+        if (wrap) { wrap.style.display = ''; }
       })
       .catch(err => {
         console.error('Erro:', err);

@@ -1,0 +1,89 @@
+{"ts":1780880104.113682,"time":"00:55:04.114","level":"info","source":"Sistema","message":"Iniciando analise financeira","meta":{"arquivo":"part_0_0001.csv","schema":"mpa_2019-11-01","cambio":5.39,"cliente":"(nao informado)"}}
+{"ts":1780880104.136313,"time":"00:55:04.136","level":"success","source":"FileParser","message":"CSV parseado: 474 linhas validas, 0 ignoradas","meta":{"columns":["subscriptionguid","resourcegroup","resourcelocation","usagedatetime","metercategory","metersubcategory","meterid","metername","meterregion","usagequantity","resourcerate","pretaxcost","consumedservice","resourcetype","instanceid","tags","offerid","additionalinfo","serviceinfo1","serviceinfo2","servicename","servicetier","currency","unitofmeasure"],"rows":474,"skipped":0}}
+{"ts":1780880104.139658,"time":"00:55:04.140","level":"info","source":"Analyzer","message":"Specs unicas montadas: 59 combinacoes de meterId+productId+location+uom","meta":[]}
+{"ts":1780880104.140219,"time":"00:55:04.140","level":"api","source":"Analyzer","message":"Iniciando consulta a API de precos Microsoft...","meta":[]}
+{"ts":1780880104.140991,"time":"00:55:04.141","level":"info","source":"PricingAPI","message":"Consulta iniciada: 59 specs, 0 cache hits, 59 para buscar na API","meta":[]}
+{"ts":1780880104.141484,"time":"00:55:04.141","level":"api","source":"PricingAPI","message":"Pass 1: meterId + priceType=Consumption (59 specs, batch=8)","meta":[]}
+{"ts":1780880104.141994,"time":"00:55:04.142","level":"debug","source":"PricingAPI","message":"Batch 1/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880108.115687,"time":"00:55:08.116","level":"success","source":"PricingAPI","message":"HTTP 200 (1015ms) meterId=a90aec9f-eec... → 38 items","meta":[]}
+{"ts":1780880108.116945,"time":"00:55:08.117","level":"success","source":"PricingAPI","message":"HTTP 200 (998ms) meterId=9c150bf9-2ba... → 52 items","meta":[]}
+{"ts":1780880108.117577,"time":"00:55:08.118","level":"success","source":"PricingAPI","message":"HTTP 200 (1054ms) meterId=bd5a77f6-93b... → 1 items","meta":[]}
+{"ts":1780880108.118119,"time":"00:55:08.118","level":"error","source":"PricingAPI","message":"HTTP 429 (2388ms) meterId=2a9992f8-e91... ERRO: ","meta":[]}
+{"ts":1780880108.118726,"time":"00:55:08.119","level":"error","source":"PricingAPI","message":"HTTP 429 (3969ms) meterId=ed8a651a-e0a... ERRO: ","meta":[]}
+{"ts":1780880108.12004,"time":"00:55:08.120","level":"success","source":"PricingAPI","message":"HTTP 200 (1052ms) meterId=bc843f27-e9d... → 1 items","meta":[]}
+{"ts":1780880108.12118,"time":"00:55:08.121","level":"success","source":"PricingAPI","message":"HTTP 200 (1000ms) meterId=9c150bf9-2ba... → 52 items","meta":[]}
+{"ts":1780880108.12201,"time":"00:55:08.122","level":"success","source":"PricingAPI","message":"HTTP 200 (1020ms) meterId=c089a13a-9dd... → 30 items","meta":[]}
+{"ts":1780880108.377391,"time":"00:55:08.377","level":"debug","source":"PricingAPI","message":"Batch 2/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880109.361997,"time":"00:55:09.362","level":"success","source":"PricingAPI","message":"HTTP 200 (967ms) meterId=d207c4bb-d8a... → 98 items","meta":[]}
+{"ts":1780880109.363379,"time":"00:55:09.363","level":"success","source":"PricingAPI","message":"HTTP 200 (979ms) meterId=0fad698c-40b... → 56 items","meta":[]}
+{"ts":1780880109.364443,"time":"00:55:09.364","level":"success","source":"PricingAPI","message":"HTTP 200 (944ms) meterId=9c150bf9-2ba... → 52 items","meta":[]}
+{"ts":1780880109.36497,"time":"00:55:09.365","level":"success","source":"PricingAPI","message":"HTTP 200 (958ms) meterId=e1115bb5-8d7... → 1 items","meta":[]}
+{"ts":1780880109.365569,"time":"00:55:09.366","level":"success","source":"PricingAPI","message":"HTTP 200 (952ms) meterId=ac404994-aee... → 1 items","meta":[]}
+{"ts":1780880109.366412,"time":"00:55:09.366","level":"success","source":"PricingAPI","message":"HTTP 200 (608ms) meterId=a90aec9f-eec... → 38 items","meta":[]}
+{"ts":1780880109.366898,"time":"00:55:09.367","level":"success","source":"PricingAPI","message":"HTTP 200 (956ms) meterId=e6ab7238-e43... → 1 items","meta":[]}
+{"ts":1780880109.367529,"time":"00:55:09.368","level":"success","source":"PricingAPI","message":"HTTP 200 (955ms) meterId=d17d1913-7cb... → 1 items","meta":[]}
+{"ts":1780880109.624515,"time":"00:55:09.625","level":"debug","source":"PricingAPI","message":"Batch 3/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880112.450248,"time":"00:55:12.450","level":"success","source":"PricingAPI","message":"HTTP 200 (2820ms) meterId=431b835b-253... → 52 items","meta":[]}
+{"ts":1780880112.450816,"time":"00:55:12.451","level":"success","source":"PricingAPI","message":"HTTP 200 (996ms) meterId=b40291f6-f45... → 1 items","meta":[]}
+{"ts":1780880112.451307,"time":"00:55:12.451","level":"success","source":"PricingAPI","message":"HTTP 200 (2307ms) meterId=a1ce959d-dde... → 1 items","meta":[]}
+{"ts":1780880112.451723,"time":"00:55:12.452","level":"success","source":"PricingAPI","message":"HTTP 200 (988ms) meterId=dbefcfc1-e3f... → 1 items","meta":[]}
+{"ts":1780880112.452279,"time":"00:55:12.452","level":"success","source":"PricingAPI","message":"HTTP 200 (997ms) meterId=fce65840-1bc... → 1 items","meta":[]}
+{"ts":1780880112.45276,"time":"00:55:12.453","level":"success","source":"PricingAPI","message":"HTTP 200 (990ms) meterId=e77ee28e-554... → 1 items","meta":[]}
+{"ts":1780880112.4534,"time":"00:55:12.453","level":"success","source":"PricingAPI","message":"HTTP 200 (983ms) meterId=52b57f57-fb1... → 1 items","meta":[]}
+{"ts":1780880112.45404,"time":"00:55:12.454","level":"success","source":"PricingAPI","message":"HTTP 200 (1145ms) meterId=28339581-90e... → 1 items","meta":[]}
+{"ts":1780880112.71887,"time":"00:55:12.719","level":"debug","source":"PricingAPI","message":"Batch 4/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880120.065811,"time":"00:55:20.066","level":"success","source":"PricingAPI","message":"HTTP 200 (1140ms) meterId=ce957933-828... → 738 items","meta":[]}
+{"ts":1780880120.068204,"time":"00:55:20.068","level":"success","source":"PricingAPI","message":"HTTP 200 (6270ms) meterId=9995d93a-7d3... → 180 items","meta":[]}
+{"ts":1780880120.069773,"time":"00:55:20.070","level":"success","source":"PricingAPI","message":"HTTP 200 (995ms) meterId=fe167397-a38... → 96 items","meta":[]}
+{"ts":1780880120.070391,"time":"00:55:20.070","level":"error","source":"PricingAPI","message":"HTTP 429 (6043ms) meterId=88a47fef-ba9... ERRO: ","meta":[]}
+{"ts":1780880120.071302,"time":"00:55:20.071","level":"success","source":"PricingAPI","message":"HTTP 200 (994ms) meterId=0b608a26-f61... → 10 items","meta":[]}
+{"ts":1780880120.072496,"time":"00:55:20.073","level":"success","source":"PricingAPI","message":"HTTP 200 (994ms) meterId=0fad698c-40b... → 56 items","meta":[]}
+{"ts":1780880120.073235,"time":"00:55:20.073","level":"success","source":"PricingAPI","message":"HTTP 200 (1011ms) meterId=88701301-f66... → 1 items","meta":[]}
+{"ts":1780880120.07385,"time":"00:55:20.074","level":"success","source":"PricingAPI","message":"HTTP 200 (7329ms) meterId=beb1457b-1ab... → 2 items","meta":[]}
+{"ts":1780880120.337916,"time":"00:55:20.338","level":"debug","source":"PricingAPI","message":"Batch 5/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880130.171274,"time":"00:55:30.171","level":"success","source":"PricingAPI","message":"HTTP 200 (1035ms) meterId=05d96412-9ca... → 1 items","meta":[]}
+{"ts":1780880130.171805,"time":"00:55:30.172","level":"success","source":"PricingAPI","message":"HTTP 200 (7575ms) meterId=552764bc-e98... → 1 items","meta":[]}
+{"ts":1780880130.172542,"time":"00:55:30.173","level":"success","source":"PricingAPI","message":"HTTP 200 (1056ms) meterId=8f967c58-b14... → 10 items","meta":[]}
+{"ts":1780880130.173165,"time":"00:55:30.173","level":"error","source":"PricingAPI","message":"HTTP 429 (8613ms) meterId=51059141-b84... ERRO: ","meta":[]}
+{"ts":1780880130.174144,"time":"00:55:30.174","level":"success","source":"PricingAPI","message":"HTTP 200 (1068ms) meterId=d0a685ee-f09... → 43 items","meta":[]}
+{"ts":1780880130.17475,"time":"00:55:30.175","level":"error","source":"PricingAPI","message":"HTTP 429 (6559ms) meterId=e57a556c-992... ERRO: ","meta":[]}
+{"ts":1780880130.175712,"time":"00:55:30.176","level":"error","source":"PricingAPI","message":"HTTP 429 (9823ms) meterId=43034668-a24... ERRO: ","meta":[]}
+{"ts":1780880130.176545,"time":"00:55:30.177","level":"success","source":"PricingAPI","message":"HTTP 200 (1054ms) meterId=7910b1eb-292... → 2 items","meta":[]}
+{"ts":1780880130.439047,"time":"00:55:30.439","level":"debug","source":"PricingAPI","message":"Batch 6/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880137.839837,"time":"00:55:37.840","level":"error","source":"PricingAPI","message":"HTTP 429 (7395ms) meterId=1b0e1506-1d4... ERRO: ","meta":[]}
+{"ts":1780880137.841127,"time":"00:55:37.841","level":"success","source":"PricingAPI","message":"HTTP 200 (1029ms) meterId=0fad698c-40b... → 56 items","meta":[]}
+{"ts":1780880137.841792,"time":"00:55:37.842","level":"success","source":"PricingAPI","message":"HTTP 200 (5777ms) meterId=a97f31a2-0fb... → 1 items","meta":[]}
+{"ts":1780880137.842421,"time":"00:55:37.842","level":"success","source":"PricingAPI","message":"HTTP 200 (1029ms) meterId=941a7a91-f0b... → 1 items","meta":[]}
+{"ts":1780880137.843382,"time":"00:55:37.843","level":"success","source":"PricingAPI","message":"HTTP 200 (3951ms) meterId=790f2be5-f19... → 1 items","meta":[]}
+{"ts":1780880137.844701,"time":"00:55:37.845","level":"success","source":"PricingAPI","message":"HTTP 200 (988ms) meterId=62d94a65-930... → 43 items","meta":[]}
+{"ts":1780880137.845337,"time":"00:55:37.845","level":"success","source":"PricingAPI","message":"HTTP 200 (996ms) meterId=48a15bc2-6e5... → 1 items","meta":[]}
+{"ts":1780880137.846128,"time":"00:55:37.846","level":"success","source":"PricingAPI","message":"HTTP 200 (995ms) meterId=cdb2af09-d87... → 1 items","meta":[]}
+{"ts":1780880138.104625,"time":"00:55:38.105","level":"debug","source":"PricingAPI","message":"Batch 7/8: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880143.078001,"time":"00:55:43.078","level":"error","source":"PricingAPI","message":"HTTP 429 (4236ms) meterId=cadf651e-298... ERRO: ","meta":[]}
+{"ts":1780880143.078878,"time":"00:55:43.079","level":"success","source":"PricingAPI","message":"HTTP 200 (2796ms) meterId=af657481-104... → 1 items","meta":[]}
+{"ts":1780880143.079495,"time":"00:55:43.080","level":"success","source":"PricingAPI","message":"HTTP 200 (668ms) meterId=617965a0-b89... → 1 items","meta":[]}
+{"ts":1780880143.079978,"time":"00:55:43.080","level":"success","source":"PricingAPI","message":"HTTP 200 (1558ms) meterId=e98d3b8d-e85... → 1 items","meta":[]}
+{"ts":1780880143.081033,"time":"00:55:43.081","level":"success","source":"PricingAPI","message":"HTTP 200 (1031ms) meterId=cc44d8d6-484... → 1 items","meta":[]}
+{"ts":1780880143.081901,"time":"00:55:43.082","level":"success","source":"PricingAPI","message":"HTTP 200 (1065ms) meterId=38b14f01-3d0... → 1 items","meta":[]}
+{"ts":1780880143.082434,"time":"00:55:43.082","level":"error","source":"PricingAPI","message":"HTTP 429 (4965ms) meterId=b44f6c24-1e6... ERRO: ","meta":[]}
+{"ts":1780880143.083229,"time":"00:55:43.083","level":"success","source":"PricingAPI","message":"HTTP 200 (1149ms) meterId=34bcffe5-038... → 1 items","meta":[]}
+{"ts":1780880143.335206,"time":"00:55:43.335","level":"debug","source":"PricingAPI","message":"Batch 8/8: 3 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880144.48275,"time":"00:55:44.483","level":"success","source":"PricingAPI","message":"HTTP 200 (997ms) meterId=e1310909-960... → 1 items","meta":[]}
+{"ts":1780880144.489072,"time":"00:55:44.489","level":"success","source":"PricingAPI","message":"HTTP 200 (1142ms) meterId=ce957933-828... → 738 items","meta":[]}
+{"ts":1780880144.489731,"time":"00:55:44.490","level":"success","source":"PricingAPI","message":"HTTP 200 (627ms) meterId=1c3226f6-f5a... → 1 items","meta":[]}
+{"ts":1780880144.494846,"time":"00:55:44.495","level":"info","source":"PricingAPI","message":"Pass 1 concluido em 40353ms — 50/59 encontrados","meta":[]}
+{"ts":1780880144.495767,"time":"00:55:44.496","level":"api","source":"PricingAPI","message":"Pass 2: sem filtro priceType (9 specs)","meta":[]}
+{"ts":1780880144.496784,"time":"00:55:44.497","level":"debug","source":"PricingAPI","message":"Batch 1/2: 8 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880149.244071,"time":"00:55:49.244","level":"success","source":"PricingAPI","message":"HTTP 200 (986ms) meterId=2a9992f8-e91... → 160 items","meta":[]}
+{"ts":1780880149.245194,"time":"00:55:49.245","level":"success","source":"PricingAPI","message":"HTTP 200 (3740ms) meterId=ed8a651a-e0a... → 46 items","meta":[]}
+{"ts":1780880149.24573,"time":"00:55:49.246","level":"success","source":"PricingAPI","message":"HTTP 200 (979ms) meterId=88a47fef-ba9... → 1 items","meta":[]}
+{"ts":1780880149.246318,"time":"00:55:49.246","level":"success","source":"PricingAPI","message":"HTTP 200 (956ms) meterId=51059141-b84... → 1 items","meta":[]}
+{"ts":1780880149.246913,"time":"00:55:49.247","level":"success","source":"PricingAPI","message":"HTTP 200 (4740ms) meterId=e57a556c-992... → 1 items","meta":[]}
+{"ts":1780880149.247456,"time":"00:55:49.247","level":"success","source":"PricingAPI","message":"HTTP 200 (2926ms) meterId=43034668-a24... → 2 items","meta":[]}
+{"ts":1780880149.248047,"time":"00:55:49.248","level":"success","source":"PricingAPI","message":"HTTP 200 (2758ms) meterId=1b0e1506-1d4... → 2 items","meta":[]}
+{"ts":1780880149.248596,"time":"00:55:49.249","level":"success","source":"PricingAPI","message":"HTTP 200 (964ms) meterId=cadf651e-298... → 1 items","meta":[]}
+{"ts":1780880149.503618,"time":"00:55:49.504","level":"debug","source":"PricingAPI","message":"Batch 2/2: 1 requests paralelas via curl_multi","meta":[]}
+{"ts":1780880156.997248,"time":"00:55:56.997","level":"success","source":"PricingAPI","message":"HTTP 200 (7488ms) meterId=b44f6c24-1e6... → 25 items","meta":[]}
+{"ts":1780880157.000771,"time":"00:55:57.001","level":"info","source":"PricingAPI","message":"Pass 2 concluido em 12504ms — 9/9 encontrados","meta":[]}
+{"ts":1780880157.012419,"time":"00:55:57.012","level":"success","source":"Analyzer","message":"Consulta API concluida em 52871ms","meta":[]}
+{"ts":1780880157.016013,"time":"00:55:57.016","level":"success","source":"Analyzer","message":"Analise concluida: 474 linhas, 0 MeterIDs nao encontrados","meta":{"totalMosp":828.81,"totalCsp":828.81,"diff":"-0%","notFound":0}}

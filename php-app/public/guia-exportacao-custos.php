@@ -1,5 +1,9 @@
 <?php
 declare(strict_types=1);
+session_start();
+
+// Initialize i18n
+require_once __DIR__ . '/../src/Shared/Services/i18n-bootstrap.php';
 
 /**
  * Guia de Exportação de Custos Azure – PDF

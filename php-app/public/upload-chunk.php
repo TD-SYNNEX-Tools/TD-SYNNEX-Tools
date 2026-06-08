@@ -3,6 +3,11 @@ declare(strict_types=1);
 session_start();
 header('Content-Type: application/json; charset=UTF-8');
 
+// Guards: arquivos grandes (chunked) podem demorar para ser concatenados.
+@ini_set('memory_limit', '512M');
+@ini_set('max_execution_time', '600');
+set_time_limit(600);
+
 /**
  * upload-chunk.php — Recebe pedaços de arquivo via fetch()
  *
@@ -84,7 +89,7 @@ if ($receivedChunks >= $totalChunks) {
         exit;
     }
 
-    // Concatenar chunks em ordem
+    // Concatenar chunks em ordem (stream copy — sem carregar cada chunk em RAM)
     for ($i = 0; $i < $totalChunks; $i++) {
         $cp = $chunkDir . '/chunk_' . str_pad((string)$i, 5, '0', STR_PAD_LEFT);
         if (!file_exists($cp)) {
@@ -94,7 +99,16 @@ if ($receivedChunks >= $totalChunks) {
             echo json_encode(['ok' => false, 'error' => "Chunk {$i} ausente"]);
             exit;
         }
-        fwrite($finalFh, file_get_contents($cp));
+        $cfh = fopen($cp, 'rb');
+        if ($cfh === false) {
+            fclose($finalFh);
+            @unlink($finalPath);
+            http_response_code(500);
+            echo json_encode(['ok' => false, 'error' => "Falha ao ler chunk {$i}"]);
+            exit;
+        }
+        stream_copy_to_stream($cfh, $finalFh);
+        fclose($cfh);
         @unlink($cp);
     }
     fclose($finalFh);

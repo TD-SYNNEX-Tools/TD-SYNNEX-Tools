@@ -1,0 +1,12 @@
+Jornada 09 - Migracao - Aceite das Transferencias
+
+Responsavel: Parceiro T1
+Prazo: -
+
+Objetivo:
+- Finalizar o aceite das transferencias iniciadas
+
+Checklist:
+- Monitorar notificacoes de transferencia
+- Executar aceite no Partner Center
+- Confirmar conclusao da etapa

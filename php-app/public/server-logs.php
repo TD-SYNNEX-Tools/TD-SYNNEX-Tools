@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 session_start();
+// Libera o lock de sessao IMEDIATAMENTE para que este endpoint possa ser
+// chamado em paralelo enquanto outras requisicoes ainda mantem $_SESSION ativo.
+session_write_close();
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -15,6 +18,12 @@ $action = $_GET['action'] ?? 'get';
 if ($action === 'clear') {
     $logger->clear();
     echo json_encode(['ok' => true, 'count' => 0]);
+    exit;
+}
+
+// Modo enxuto: apenas a contagem total (usado pelo polling de fundo).
+if (!empty($_GET['countOnly'])) {
+    echo json_encode(['ok' => true, 'total' => $logger->getCount(), 'logs' => []]);
     exit;
 }
 

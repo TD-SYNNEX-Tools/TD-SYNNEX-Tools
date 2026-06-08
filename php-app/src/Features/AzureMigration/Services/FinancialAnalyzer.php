@@ -61,7 +61,12 @@ class FinancialAnalyzer
             fclose($fh);
             return ['success' => false, 'error' => 'Arquivo sem cabecalho.', 'data' => []];
         }
-        $headers = array_map(fn($h) => strtolower(trim((string)$h)), $raw);
+        // Normaliza headers: lowercase + remove TODO caractere nao alfanumerico
+        // ("Subscription Name" -> "subscriptionname", "Resource_Group" -> "resourcegroup")
+        $headers = array_map(
+            fn($h) => preg_replace('/[^a-z0-9]/', '', strtolower(trim((string)$h))),
+            $raw
+        );
 
         // Valida colunas obrigatorias baseadas no tipo de migracao
         // Colunas essenciais para comparacao com API Azure: MeterID, Quantity, UnitOfMeasure, MeterName, ServiceName
@@ -108,12 +113,12 @@ class FinancialAnalyzer
                 continue;
             }
 
-            $meterId      = trim($r['meterid'] ?? '');
-            $quantity     = (float)($r[$qtyColumn] ?? 0);
-            $unitOfMeasure = trim($r['unitofmeasure'] ?? '');
-            $meterName    = trim($r['metername'] ?? '');
+            $meterId      = trim($r['meterid'] ?? $r['meterguid'] ?? '');
+            $quantity     = (float)($r[$qtyColumn] ?? $r['quantity'] ?? $r['usagequantity'] ?? $r['consumedquantity'] ?? 0);
+            $unitOfMeasure = trim($r['unitofmeasure'] ?? $r['unit'] ?? $r['unitname'] ?? '');
+            $meterName    = trim($r['metername'] ?? $r['skuname'] ?? '');
             // ServiceName: prioriza servicename > metercategory > consumedservice
-            $serviceName  = trim($r['servicename'] ?? $r['metercategory'] ?? $r['consumedservice'] ?? '');
+            $serviceName  = trim($r['servicename'] ?? $r['metercategory'] ?? $r['consumedservice'] ?? $r['servicetier'] ?? '');
 
             // Valida campos obrigatorios por linha
             if ($meterId === '' || $quantity <= 0) {
@@ -126,7 +131,7 @@ class FinancialAnalyzer
                 'quantity'              => $quantity,
                 // CSP exports may use InstanceName / ResourceName interchangeably
                 'resourceName'          => (function() use ($r): string {
-                    $raw = trim($r['resourcename'] ?? $r['instancename'] ?? $r['resourceid'] ?? '');
+                    $raw = trim($r['resourcename'] ?? $r['instancename'] ?? $r['resource'] ?? $r['resourceid'] ?? '');
                     // InstanceName and ResourceId are full ARM paths like
                     // /subscriptions/.../storageAccounts/stopocalpine2025
                     // Extract only the last segment after the final "/"
@@ -136,24 +141,43 @@ class FinancialAnalyzer
                     return $raw;
                 })(),
                 // CSP exports may use ResourceGroupName instead of ResourceGroup
-                'resourceGroup'         => trim($r['resourcegroup'] ?? $r['resourcegroupname'] ?? ''),
-                'resourceLocation'      => trim($r['resourcelocation'] ?? $r['location'] ?? ''),
-                'productName'           => trim($r['productname']           ?? ''),
-                'productId'             => trim($r['productid']             ?? ''),
+                'resourceGroup'         => trim($r['resourcegroup'] ?? $r['resourcegroupname'] ?? $r['rg'] ?? ''),
+                // Prioriza coluna Location (formato "BR South") para comparar com API location
+                'resourceLocation'      => trim($r['location'] ?? $r['resourcelocation'] ?? $r['region'] ?? $r['meterlocation'] ?? $r['meterregion'] ?? $r['availabilityzone'] ?? $r['datacenter'] ?? ''),
+                'productName'           => trim($r['productname'] ?? $r['product'] ?? $r['publishername'] ?? ''),
+                'productId'             => trim($r['productid'] ?? $r['productorderid'] ?? $r['productordername'] ?? ''),
                 'meterName'             => $meterName,
-                'meterCategory'         => trim($r['metercategory']         ?? ''),
+                'meterCategory'         => trim($r['metercategory']         ?? $r['servicename'] ?? ''),
                 'meterSubcategory'      => trim($r['metersubcategory']      ?? ''),
                 'serviceName'           => $serviceName,
-                'serviceFamily'         => trim($r['servicefamily']         ?? ''),
-                'consumedService'       => trim($r['consumedservice']       ?? ''),
+                'serviceFamily'         => trim($r['servicefamily']         ?? $r['servicetier'] ?? ''),
+                'consumedService'       => trim($r['consumedservice']       ?? $r['servicename'] ?? ''),
                 'unitOfMeasure'         => $unitOfMeasure,
-                'costInBillingCurrency' => (float)($r['costinbillingcurrency'] ?? 0),
-                'unitPrice'             => (float)($r['unitprice']          ?? 0),
-                'billingCurrencyCode'   => trim($r['billingcurrencycode']   ?? 'USD'),
-                'date'                  => trim($r['date'] ?? $r['usagedatetime'] ?? ''),
-                'subscriptionName'      => trim($r['subscriptionname']      ?? ''),
-                'subscriptionId'        => trim($r['subscriptionid']        ?? ''),
-                'resourceId'            => trim($r['resourceid'] ?? $r['instanceid'] ?? ''),
+                'costInBillingCurrency' => (float)($r['costinbillingcurrency'] ?? $r['cost'] ?? $r['pretaxcost'] ?? $r['totalcost'] ?? $r['effectiveprice'] ?? $r['extendedcost'] ?? $r['billingcost'] ?? 0),
+                'unitPrice'             => (float)($r['unitprice'] ?? $r['effectiveprice'] ?? $r['resourcerate'] ?? 0),
+                'billingCurrencyCode'   => trim($r['billingcurrencycode'] ?? $r['billingcurrency'] ?? $r['currency'] ?? $r['pricingcurrency'] ?? 'USD'),
+                'date'                  => trim($r['date'] ?? $r['usagedatetime'] ?? $r['usagedate'] ?? $r['chargestartdate'] ?? $r['billingperiodstartdate'] ?? $r['servicedate'] ?? $r['eventdate'] ?? ''),
+                'subscriptionName'      => trim(
+                                              $r['subscriptionname']
+                                            ?? $r['subscription']
+                                            ?? $r['accountname']
+                                            ?? $r['accountownername']
+                                            ?? $r['accountowner']
+                                            ?? $r['invoicesectionname']
+                                            ?? $r['departmentname']
+                                            ?? $r['billingaccountname']
+                                            ?? ''
+                                          ),
+                'subscriptionId'        => trim(
+                                              $r['subscriptionid']
+                                            ?? $r['subscriptionguid']
+                                            ?? $r['accountownerid']
+                                            ?? $r['accountid']
+                                            ?? $r['enrollmentaccountid']
+                                            ?? $r['billingaccountid']
+                                            ?? ''
+                                          ),
+                'resourceId'            => trim($r['resourceid'] ?? $r['instanceid'] ?? $r['instancename'] ?? ''),
             ];
         }
         fclose($fh);
@@ -195,6 +219,7 @@ class FinancialAnalyzer
                     'resourceLocation' => $row['resourceLocation'],
                     'unitOfMeasure'    => $row['unitOfMeasure'],
                     'meterName'        => $row['meterName'],
+                    'serviceName'      => $row['serviceName'] ?: ($row['meterCategory'] ?: $row['serviceFamily']),
                 ];
             }
         }
@@ -211,6 +236,7 @@ class FinancialAnalyzer
         $byRg       = [];
         $bySub      = [];
         $notFound   = [];
+        $notFoundDetails = [];
 
         foreach ($rows as $row) {
             $id        = $row['meterId'];
@@ -223,8 +249,24 @@ class FinancialAnalyzer
             if ($priceData !== null) {
                 $unitCsp = $priceData['unitPrice'];
                 $costCsp = round($row['quantity'] * $unitCsp, 6);
-            } elseif (!in_array($id, $notFound, true)) {
-                $notFound[] = $id;
+            } else {
+                if (!in_array($id, $notFound, true)) {
+                    $notFound[] = $id;
+                }
+                if (!isset($notFoundDetails[$id])) {
+                    $notFoundDetails[$id] = [
+                        'meterId'          => $id,
+                        'meterName'        => $row['meterName'] ?? '',
+                        'serviceName'      => $row['serviceName'] ?: ($row['meterCategory'] ?: $row['serviceFamily']),
+                        'resourceLocation' => $row['resourceLocation'] ?? '',
+                        'unitOfMeasure'    => $row['unitOfMeasure'] ?? '',
+                        'productName'      => $row['productName'] ?? '',
+                        'count'            => 0,
+                        'totalCost'        => 0.0,
+                    ];
+                }
+                $notFoundDetails[$id]['count']++;
+                $notFoundDetails[$id]['totalCost'] += $costMosp;
             }
 
             $totalMosp += $costMosp;
@@ -280,7 +322,10 @@ class FinancialAnalyzer
                 'differencePercent' => $diffPct,
                 'priceFound'        => $priceData !== null,
                 'cspServiceName'    => $priceData['serviceName']   ?? null,
+                'cspServiceFamily'  => $priceData['serviceFamily'] ?? null,
                 'cspMeterName'      => $priceData['meterName']     ?? null,
+                'cspProductName'    => $priceData['productName']   ?? null,
+                'cspPriceType'      => $priceData['priceType']     ?? null,
                 'resourceLocation'  => $row['resourceLocation'],
                 'productId'         => $row['productId'],
                 'subscriptionId'    => $row['subscriptionId'],
@@ -307,6 +352,10 @@ class FinancialAnalyzer
         $globalDiff    = $totalCsp - $totalMosp;
         $globalDiffPct = $totalMosp > 0 ? ($globalDiff / $totalMosp) * 100 : 0.0;
 
+        // Ordena nao-encontrados por custo total (maior impacto primeiro)
+        $notFoundDetailsList = array_values($notFoundDetails);
+        usort($notFoundDetailsList, fn($a, $b) => $b['totalCost'] <=> $a['totalCost']);
+
         $this->logger->success('Analyzer', 'Analise concluida: ' . count($rows) . ' linhas, ' . count($notFound) . ' MeterIDs nao encontrados', [
             'totalMosp' => round($totalMosp, 2),
             'totalCsp'  => round($totalCsp, 2),
@@ -328,6 +377,7 @@ class FinancialAnalyzer
                 'differenceBrl'     => $globalDiff * $exchangeRate,
                 'exchangeRate'      => $exchangeRate,
                 'notFoundMeterIds'  => $notFound,
+                'notFoundDetails'   => $notFoundDetailsList,
                 'notFoundCount'     => count($notFound),
                 'byService'         => $byService,
                 'byResourceGroup'   => $byRg,
